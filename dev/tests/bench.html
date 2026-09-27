@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en"><head><meta charset="utf-8"><title>Repix bench</title>
+<style>
+  body{background:#14151a;color:#e8e9ee;font:13px/1.5 ui-monospace,Consolas,monospace;padding:14px;margin:0}
+  h1{font:600 15px system-ui;margin:0 0 4px}
+  p{font:13px/1.5 system-ui;color:#9aa0b0;margin:0 0 12px;max-width:900px}
+  button{background:#2e3140;color:#e8e9ee;border:1px solid #3a3e50;border-radius:7px;
+    padding:7px 12px;font:inherit;cursor:pointer;margin:0 8px 8px 0}
+  button:hover{background:#383c4e}
+  pre{background:#1d1f27;padding:12px;border-radius:9px;white-space:pre-wrap;border:1px solid #2e3140}
+  .pass{color:#7fd48a}.fail{color:#ff7a7a}
+</style></head><body>
+<h1>Repix bench</h1>
+<p>Tests the core embedded in <code>repix.html in the project root</code> — the very file that is shipped (run <code>zig build</code> first) —
+through the same pipeline the page runs. Serve the repository root over HTTP
+(e.g. <code>python -m http.server</code>) and open <code>/tests/bench.html</code>.
+Synthetic works need no files; real pairs are read from <code>tests/data/</code> when present.</p>
+<button id="all">Run all</button>
+<button id="regression">Regression</button>
+<button id="record">Record expected</button>
+<button id="grid">Grid</button>
+<button id="fixed">Fixed point</button>
+<button id="pass1">Pass 1</button>
+<button id="stages">Stages 2–3</button>
+<button id="pairs">Real pairs</button>
+<pre id="out">ready</pre>
+
+<script type="module">
+import { loadCore, findGrid, borders, pass1, stage1, pipeline } from './lib/core.js';
+import { loadRGB, paints, align, truthClusters, spotLosses, SPOT_NAMES } from './lib/measure.js';
+import { makeArt, upscale, grain, blur, jpeg, hash } from './lib/synth.js';
+
+const out = document.getElementById('out');
+const say = (t, cls) => {
+  if (cls) { const s = document.createElement('span'); s.className = cls; s.textContent = t + '\n'; out.appendChild(s); }
+  else out.append(t + '\n');
+};
+// Gives the page a turn between works, so the output shows as it comes. Not a
+// timer: in a background tab the browser slows timers down to one a second or
+// even one a minute, and the bench would take hours.
+const frame = () => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r(); c.port2.postMessage(0); });
+const pad = (s, n) => String(s).padEnd(n), lpad = (s, n) => String(s).padStart(n);
+
+// The synthetic set: fixed seeds and sizes, so every run sees the same works.
+const SYNTH = [[1, 48, 40], [2, 64, 64], [3, 96, 72], [4, 128, 96], [5, 80, 120]]
+  .map(([seed, w, h]) => ({ name: `synth-${seed} ${w}x${h}`, art: makeArt(seed, w, h) }));
+const origin = step => [step * 0.37 + 2.1, step * 0.63 + 1.4];
+
+async function realArts() {
+  try {
+    const list = await (await fetch('data/art.json')).json();
+    const arts = [];
+    for (const f of list) arts.push({ name: f.split('/').pop().replace('.png', ''), art: await loadRGB('data/' + f) });
+    return arts;
+  } catch (_) { return []; }
+}
+
+/* ===== regression: exact results on the synthetic set ===== */
+const REG_STEPS = [2.5, 3.75, 5.2, 8];
+const REG_SPOIL = { clean: i => i, grain: i => grain(i, 12, 7), 'blur+grain': i => grain(blur(i), 6, 11) };
+function regressionRun() {
+  const res = {};
+  for (const { name, art } of SYNTH) for (const step of REG_STEPS) for (const [sp, f] of Object.entries(REG_SPOIL)) {
+    const [ox, oy] = origin(step);
+    const img = f(upscale(art, step, ox, oy));
+    const r = pipeline(img);
+    const g = r.grid ? [r.grid.step, r.grid.ox, r.grid.oy] : [];
+    res[`${name} ×${step} ${sp}`] = r.s3
+      ? [hash(g), hash(r.s1.art, r.s1.meas), hash(r.s2.art, r.s2.label), hash(r.s3.art, r.s3.palette), r.s2.groups, r.s3.paints].join(' ')
+      : 'no result';
+  }
+  return res;
+}
+async function regression() {
+  say('== Regression: exact results on the synthetic set against tests/expected.json');
+  let expected;
+  try { expected = await (await fetch('expected.json?' + Date.now())).json(); }
+  catch (_) { say('no expected.json — press "Record expected" once and save the file', 'fail'); return false; }
+  const got = regressionRun();
+  let bad = 0;
+  for (const k of Object.keys(expected)) if (got[k] !== expected[k]) { bad++; say(`  CHANGED ${k}\n    was ${expected[k]}\n    now ${got[k]}`, 'fail'); }
+  for (const k of Object.keys(got)) if (!(k in expected)) { bad++; say(`  NEW ${k}`, 'fail'); }
+  const n = Object.keys(got).length;
+  say(bad ? `FAIL: ${bad} of ${n} cases differ` : `PASS: all ${n} cases identical`, bad ? 'fail' : 'pass');
+  return !bad;
+}
+function record() {
+  const got = regressionRun();
+  const blob = new Blob([JSON.stringify(got, null, 1) + '\n'], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'expected.json'; a.textContent = 'expected.json';
+  say(`== Recorded ${Object.keys(got).length} cases. Save as tests/expected.json: `);
+  out.appendChild(a); say('');
+}
+
+/* ===== grid: known answer under growing JPEG compression ===== */
+const GRID_STEPS = [2.6, 3.4, 4.7, 6.1, 8.25, 10, 11.7], QUALITIES = [0.95, 0.88, 0.75, 0.62, 0.5, 0.4, 0.3];
+async function grid() {
+  say('== Grid: step found within 1% (synthetic works + tests/data arts)');
+  const works = SYNTH.concat(await realArts());
+  const byQ = QUALITIES.map(() => [0, 0]);
+  let worst = 0;
+  for (const { name, art } of works) for (const step of GRID_STEPS) {
+    if (step * Math.max(art.w, art.h) > 2200) continue;
+    const [ox, oy] = origin(step);
+    const up = upscale(art, step, ox, oy);
+    for (let q = 0; q < QUALITIES.length; q++) {
+      const g = findGrid(await jpeg(up, QUALITIES[q]));
+      const miss = g ? Math.abs(g.step - step) / step : 1;
+      byQ[q][1]++;
+      if (miss < 0.01) byQ[q][0]++;
+      else if (QUALITIES[q] >= 0.62) say(`  miss ${pad(name, 24)} ×${lpad(step, 5)} q ${QUALITIES[q]}  found ${g ? g.step.toFixed(4) : '—'}`);
+      if (QUALITIES[q] >= 0.62 && miss > worst) worst = miss;
+    }
+    await frame();
+  }
+  say('  JPEG quality   found');
+  byQ.forEach(([ok, n], q) => say(`  ${lpad(QUALITIES[q], 11)}   ${ok}/${n}`));
+  const good = byQ.slice(0, 4).reduce((a, b) => [a[0] + b[0], a[1] + b[1]], [0, 0]);
+  const pass = good[0] / good[1] >= 0.95;
+  say(`${pass ? 'PASS' : 'FAIL'}: ${good[0]}/${good[1]} at q >= 0.62 (need 95%), worst miss ${(100 * worst).toFixed(2)}%`, pass ? 'pass' : 'fail');
+  return pass;
+}
+
+/* ===== fixed point: finished art must come back unchanged =====
+   Two ways. Without overlap a cell sees only its own pixels, so even a wide
+   fixed tolerance cannot move it. With overlap, the stage runs as the page
+   runs it — with the core's advice: a fixed tolerance of 16 WOULD merge a
+   work's shades closer than 16 (orange_maple has thousands of such
+   neighbours, the closest 6 apart), and that is what a tolerance means, not
+   a fault. */
+async function fixed() {
+  say('== Fixed point: pass 1 over clean upscaled art returns it exactly');
+  let bad = 0;
+  for (const { name, art } of SYNTH.concat(await realArts())) {
+    const step = 5, ox = 2, oy = 3;
+    const img = upscale(art, step, ox, oy);
+    const gx = borders(img.w, step, ox), gy = borders(img.h, step, oy);
+    const sx = gx[0] === 0 ? 1 : 0, sy = gy[0] === 0 ? 1 : 0;
+    const moved = r => {
+      let diff = 0;
+      for (let y = 0; y < art.h; y++) for (let x = 0; x < art.w; x++) {
+        const a = ((y + sy) * r.w + (x + sx)) * 3, b = (y * art.w + x) * 3;
+        if (r.art[a] !== art.data[b] || r.art[a + 1] !== art.data[b + 1] || r.art[a + 2] !== art.data[b + 2]) diff++;
+      }
+      return diff;
+    };
+    const bare = moved(pass1(img, gx, gy, { overlap: 0, tolerance: 16, agreement: 7 }));
+    if (bare) { bad++; say(`  ${pad(name, 24)} no overlap: ${bare} cells changed`, 'fail'); }
+    const own = stage1(img, { step, ox, oy });
+    const byAdvice = own ? moved(own) : -1;
+    if (byAdvice) { bad++; say(`  ${pad(name, 24)} as the page runs it (overlap ${own ? own.knobs.overlap : '-'}): ${byAdvice} cells changed`, 'fail'); }
+    await frame();
+  }
+  say(bad ? `FAIL: ${bad} cases moved` : 'PASS: every work stays as it is', bad ? 'fail' : 'pass');
+  return !bad;
+}
+
+/* ===== pass 1 quality against the truth ===== */
+async function quality() {
+  say('== Pass 1: losses and error against the truth (JPEG q 0.72, advice as in the page)');
+  say('  work                       step    size       losses%  error');
+  let sum = 0, n = 0;
+  for (const { name, art } of SYNTH.concat(await realArts())) for (const step of [3, 4.7014, 8.25]) {
+    if (step * Math.max(art.w, art.h) > 2200) continue;
+    const [ox, oy] = origin(step);
+    const img = await jpeg(upscale(art, step, ox, oy), 0.72);
+    const g = findGrid(img);
+    const s1 = g && stage1(img, g);
+    if (!s1) { say(`  ${pad(name, 26)} ${lpad(step, 6)}  no result`, 'fail'); continue; }
+    const p = paints(art), a = align(s1.art, s1.w, s1.h, p, art.w, art.h);
+    if (!a) { say(`  ${pad(name, 26)} ${lpad(step, 6)}  does not align`, 'fail'); continue; }
+    sum += a.losses; n++;
+    say(`  ${pad(name, 26)} ${lpad(step, 6)}  ${pad(s1.w + 'x' + s1.h, 9)} ${lpad(a.losses.toFixed(2), 8)} ${lpad(a.error.toFixed(2), 6)}`);
+    await frame();
+  }
+  say(`  mean losses ${(sum / n).toFixed(3)}% over ${n} cases`);
+  return true;
+}
+
+/* ===== stages 2–3: do small spots survive? ===== */
+async function stages() {
+  say('== Stages 2–3: cells of truth spots that went to a neighbouring paint (JPEG q 0.72)');
+  const acc = SPOT_NAMES.map(() => ({ cells: 0, lost: 0, spots: 0, broken: 0 }));
+  let paintsSum = 0, truthPaints = 0, n = 0;
+  for (const { name, art } of SYNTH.concat(await realArts())) {
+    const step = 4.7014;
+    if (step * Math.max(art.w, art.h) > 2200) continue;
+    const [ox, oy] = origin(step);
+    const img = await jpeg(upscale(art, step, ox, oy), 0.72);
+    const r = pipeline(img);
+    if (!r.s3) { say(`  ${name}: no result`, 'fail'); continue; }
+    const p = paints(art), cl = truthClusters(p, art.w, art.h);
+    const a = align(r.s1.art, r.s1.w, r.s1.h, p, art.w, art.h);
+    const s = spotLosses(r.s3.art, r.s3.w, r.s3.h, cl, p, art.w, art.h, a.dx, a.dy);
+    s.bySize.forEach((b, k) => { for (const f in b) acc[k][f] += b[f]; });
+    paintsSum += r.s3.paints; truthPaints += p.count; n++;
+    say(`  ${pad(name, 26)} clusters ${lpad(r.s2.groups, 6)}  paints ${lpad(r.s3.paints, 4)} / truth ${lpad(p.count, 3)}  lost ${s.share.toFixed(2)}%`);
+    await frame();
+  }
+  say('  spot size    cells lost   spots broken (lost more than half)');
+  acc.forEach((b, k) => say(`  ${pad(SPOT_NAMES[k], 10)} ${lpad(b.cells ? (100 * b.lost / b.cells).toFixed(2) + '%' : '-', 12)} ${lpad(b.spots ? (100 * b.broken / b.spots).toFixed(2) + '%' : '-', 14)}  of ${b.spots}`));
+  say(`  paints: ${paintsSum} found for ${truthPaints} in the truth, ${n} works`);
+  return true;
+}
+
+/* ===== real pairs: a picture from the internet and a hand-made truth ===== */
+async function pairsBench() {
+  say('== Real pairs from tests/data/pairs.json');
+  let list;
+  try { list = await (await fetch('data/pairs.json')).json(); }
+  catch (_) { say('  no tests/data/pairs.json — skipped (see README, "Tests")'); return true; }
+  say('  work                  true step  found    miss%   size          losses%  error');
+  const misses = [];
+  let found = 0, sum = 0, n = 0;
+  for (const p of list) {
+    try {
+      const src = await loadRGB('data/' + p.source), t = await loadRGB('data/' + p.truth);
+      const g = findGrid(src);
+      if (!g) { say(`  ${pad(p.name, 20)} no grid`, 'fail'); continue; }
+      const miss = 100 * Math.abs(g.step - p.step) / p.step;
+      misses.push(miss);
+      const s1 = stage1(src, g);
+      const size = s1 ? `${s1.w}x${s1.h}/${t.w}x${t.h}` : '—';
+      if (s1 && Math.abs(s1.w - t.w) <= 2 && Math.abs(s1.h - t.h) <= 2) found++;
+      let l = '', e = '';
+      if (s1) {
+        const pp = paints(t), a = align(s1.art, s1.w, s1.h, pp, t.w, t.h);
+        if (a) { l = a.losses.toFixed(2); e = a.error.toFixed(2); sum += a.losses; n++; }
+      }
+      say(`  ${pad(p.name, 20)} ${lpad(p.step.toFixed(4), 9)} ${lpad(g.step.toFixed(4), 8)} ${lpad(miss.toFixed(3), 7)}   ${pad(size, 13)} ${lpad(l, 8)} ${lpad(e, 6)}`);
+    } catch (err) { say(`  ${p.name}: ${err}`, 'fail'); }
+    await frame();
+  }
+  misses.sort((a, b) => a - b);
+  say(`  size found for ${found} of ${list.length}; median step miss ${misses.length ? misses[misses.length >> 1].toFixed(3) : '-'}%; mean losses ${n ? (sum / n).toFixed(3) : '-'}%`);
+  return true;
+}
+
+const run = async (...fs) => {
+  out.textContent = '';
+  say(`core ${await loadCore()} bytes, from repix.html in the project root\n`);
+  let ok = true;
+  for (const f of fs) { ok = (await f()) && ok; say(''); await frame(); }
+  window.benchDone = ok;
+  return ok;
+};
+document.getElementById('all').onclick = () => run(regression, grid, fixed, quality, stages, pairsBench);
+document.getElementById('regression').onclick = () => run(regression);
+document.getElementById('record').onclick = async () => { out.textContent = ''; await loadCore(); record(); };
+document.getElementById('grid').onclick = () => run(grid);
+document.getElementById('fixed').onclick = () => run(fixed);
+document.getElementById('pass1').onclick = () => run(quality);
+document.getElementById('stages').onclick = () => run(stages);
+document.getElementById('pairs').onclick = () => run(pairsBench);
+window.bench = { run, regression, regressionRun, grid, fixed, quality, stages, pairsBench, loadCore };
+</script></body></html>

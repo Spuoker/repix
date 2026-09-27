@@ -1,0 +1,5 @@
+# Build cache and the release zip: `zig build` recreates them.
+dev/zig-out/
+dev/.zig-cache/
+# Test pictures are other people's artworks: they stay local.
+dev/tests/data/
