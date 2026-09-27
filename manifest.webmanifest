@@ -1,0 +1,27 @@
+{
+  "name": "Repix — pixel art restoration",
+  "short_name": "Repix",
+  "description": "Finds the grid of an upscaled, recompressed picture and gives the pixel art back at its native resolution.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#008080",
+  "theme_color": "#c0c0c0",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "image/png": [".png"],
+        "image/jpeg": [".jpg", ".jpeg"],
+        "image/webp": [".webp"],
+        "image/gif": [".gif"],
+        "image/bmp": [".bmp"]
+      }
+    }
+  ]
+}
