@@ -6,6 +6,15 @@ its native resolution: one grid cell = one pixel.
 
 **The pixels are already in the file. JPEG only fogged them. Repix develops them.**
 
+And it runs on an engine of its own: nothing in it jumps, nothing is
+recomputed for no reason. Everything that moves goes to its goal by one law of
+motion, and the layout changes only at thresholds worked out from the data —
+see [The engine](#the-engine).
+
+**From the concept to this release: nine days.**
+
+<img width="1920" height="1080" alt="Снимок экрана 2026-09-28 174003" src="https://github.com/user-attachments/assets/66da5780-752e-4f3a-9c04-9210fc2d1896" />
+
 ## Running it
 
 **On the web:** https://spuoker.github.io/repix/ — the browser offers to
@@ -14,15 +23,17 @@ install it as an app (on a phone too); it then works without the network.
 **From disk:** download `repix.html` and open it with a double click. That's all.
 
 No installation, no server, no internet. One self-contained page of about
-470 KB with the computing core (WebAssembly, ~115 KB) and the font inside. It
+620 KB with the computing core (WebAssembly, ~118 KB) and the font inside. It
 works on a phone too, with the same results: an Android browser opens the file
 from the device; an iPhone does not run a page saved on it, so there open it by
 its web link.
 
 Drop an image onto the window or press **Open**. The grid is found by itself;
-if it misses, the knobs fix it and the result updates at once. **Guide** in the
-settings menu (the gear on the **Repix** plate) lists every mouse, key and
-finger action.
+if it misses, the knobs fix it and the result updates at once. A knob's field
+counts: type `12/3` or `(2+3)*4` and the value follows as you type. **F11**
+gives the page its own full screen, with no browser bar dropping over the
+buttons. **Guide** in the settings menu (the gear on the **Repix** plate)
+lists every mouse, key and finger action.
 
 ## The four stages
 
@@ -60,6 +71,35 @@ hand changes *what* goes into a cell, not what the cell looks like.
 - **One live source per layer.** Not three variants to pick the best from.
 - A threshold tuned on one work means nothing: it is measured on a bench with
   known answers — and then checked by eye.
+
+## The engine
+
+Repix is not built on a UI library. It runs on a **framework-engine** of its
+own, written for it and living inside the same page:
+
+- **Everything that moves goes to a goal.** A button finding its new place, a
+  panel rolling into one row, a scroll, a fading hint, a theme color, the
+  pictures' zoom — one law of motion for all of them: a mass on a spring with
+  a damper. A new goal on the way turns it without a jerk; let go with speed,
+  it glides and slows; pushed past an edge, it stretches and springs back.
+- **Triggers, not recomputation.** A change is an input, its consequence is
+  worked out from data before anything is painted. When nothing changes,
+  nothing runs.
+- **Thresholds are data.** How the panels fold at a given width is a function
+  of widths measured once; where the fold would change is worked out from the
+  same numbers. Crossing such a threshold lays the panel out anew — smoothly,
+  even while the window is being dragged.
+- **The standard is the engine's.** Every object is a description; every
+  argument has one standard in one table, and a description names only what
+  differs. No window has rules of its own.
+- **Pixel style out of the box.** Sizes, gaps, frames and shadows are counted
+  in grid pixels, and a grid pixel is a whole number of screen pixels, so
+  edges stay sharp at 125% or on a phone. The font is a pixel font, the icons
+  are drawn cell by cell, the pictures are shown without smoothing, and what
+  comes to rest lands on the grid. Motion itself runs smoothly between the
+  pixels — the style is pixel, the movement is not.
+
+The model and the rules for working on it: [`dev/ENGINE.md`](dev/ENGINE.md).
 
 ## Building
 
@@ -104,6 +144,8 @@ README.md               this description
 LICENSE                 GPL-3.0
 .gitignore              what git leaves out: build cache, zip, test pictures
 dev/                    everything else
+  ENGINE.md             the framework-engine: its model, its parts, how to
+                        work on it
   build.zig             `zig build`: core -> wasm, page, zip, site
   src/
     core/               Zig, compiled to WebAssembly
@@ -115,7 +157,8 @@ dev/                    everything else
       pass2.zig         pass 2: cells -> clusters
       pass3.zig         pass 3: clusters -> paints across the work, palette
     ui/
-      template.html     the live source of the page (layout, styles, interface)
+      template.html     the live source of the page: the interface and the
+                        framework-engine it runs on
       pipeline.js       how the page drives the core, as pure functions; the
                         build puts it into the page, the tests import it
       worker.js         the core's own thread: the page sends it jobs and
