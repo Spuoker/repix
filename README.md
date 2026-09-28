@@ -23,7 +23,7 @@ install it as an app (on a phone too); it then works without the network.
 **From disk:** download `repix.html` and open it with a double click. That's all.
 
 No installation, no server, no internet. One self-contained page of about
-620 KB with the computing core (WebAssembly, ~118 KB) and the font inside. It
+630 KB with the computing core (WebAssembly, ~118 KB) and the font inside. It
 works on a phone too, with the same results: an Android browser opens the file
 from the device; an iPhone does not run a page saved on it, so there open it by
 its web link.
@@ -34,6 +34,13 @@ counts: type `12/3` or `(2+3)*4` and the value follows as you type. **F11**
 gives the page its own full screen, with no browser bar dropping over the
 buttons. **Guide** in the settings menu (the gear on the **Repix** plate)
 lists every mouse, key and finger action.
+
+The same menu holds **52 themes**, each with an idea behind it and kept by
+families: light daylight ones, the old machines pixel art was born on, a bar
+(a drink each), sodas, warm wood and tea, water and night skies, dark nights
+with a story. Mark the ones you like with a heart, and the arrows flip through
+your favorites only. Your own themes can be made, edited, saved to a file and
+loaded elsewhere.
 
 ## The four stages
 

@@ -248,7 +248,11 @@ if(location.protocol==='https:'||location.hostname==='localhost'){
      and the plus and minus of the themes, are such buttons. */
   .bare{padding:var(--unit) calc(var(--unit)*2);background:none;box-shadow:none;min-height:0;
     color:var(--text)}
-  .bare:hover:not(:disabled),.bare.held{color:var(--accentText)}
+  /* Under the mouse the accent that reads on the panel; held (a lit heart, a
+     closed lock) the accent itself — an icon is a mark, not a line to read,
+     and the accent darkened for reading looks like a dimmer one. */
+  .bare:hover:not(:disabled){color:var(--accentText)}
+  .bare.held{color:var(--accent)}
   .bare svg{width:calc(var(--unit)*7);height:calc(var(--unit)*7);display:block;
     shape-rendering:crispEdges;fill:currentColor}
   /* A swatch is the same button with the same bevel: click it to choose. */
@@ -483,8 +487,10 @@ if(location.protocol==='https:'||location.hostname==='localhost'){
 
   /* A STRIP — ONE ROW, NOT A CARPET (the palette is one). What does not fit
      goes past the edge and is scrolled — with the wheel, or dragged with a
-     finger. Shutters at the edges say there is more. */
-  .strip{display:flex;flex-wrap:nowrap;gap:var(--gapInner);
+     finger. Shutters at the edges say there is more. The tiles stand side by
+     side with no gap: a mouse led along the strip goes from paint to paint,
+     never over the panel between them, so nothing blinks off and on. */
+  .strip{display:flex;flex-wrap:nowrap;gap:0;
     --ribbonPad:var(--shelf);
     padding:var(--ribbonPad);position:relative;
     background:var(--panel);border-top:var(--unit) solid var(--frameColor);
@@ -537,12 +543,12 @@ if(location.protocol==='https:'||location.hostname==='localhost'){
     display:inline-block;cursor:default;
     box-shadow:inset var(--unit) var(--unit) 0 0 rgba(255,255,255,.3),
                inset calc(var(--unit)*-1) calc(var(--unit)*-1) 0 0 rgba(0,0,0,.45)}
-  /* Whatever is in hand — a paint or a tool — is marked the same way: a frame
-     of two grid pixels, white outside and black inside, visible on light and
-     dark paints alike. */
+  /* The paint in hand keeps its bevel, and the bevel itself — its light and
+     its shadow — is painted in the paint's OPPOSITE color: it shows on any
+     paint, and stays inside the tile, touching no neighbour. */
   .strip .tile.held{cursor:pointer;
-    box-shadow:0 0 0 var(--unit) var(--text),
-               inset 0 0 0 var(--unit) var(--shadow)}
+    box-shadow:inset var(--unit) var(--unit) 0 0 var(--oppLight),
+               inset calc(var(--unit)*-1) calc(var(--unit)*-1) 0 0 var(--oppShade)}
   /* A paint pointed at from the picture shows its OWN frame: the same light
      top-left edge and dark bottom-right edge, at full strength. */
   .strip .tile.pointed{
@@ -729,6 +735,10 @@ const ICON_BOX_OFF =
   '<svg viewBox="0 0 7 7" aria-hidden="true"><path d="M0 0h7v1H0zM0 6h7v1H0zM0 1h1v5H0zM6 1h1v5H6z"/></svg>';
 const ICON_BOX_ON =
   '<svg viewBox="0 0 7 7" aria-hidden="true"><path d="M0 0h7v1H0zM0 6h7v1H0zM0 1h1v5H0zM6 1h1v5H6zM2 2h3v3H2z"/></svg>';
+/* A heart, seven cells wide: a favorite theme. */
+const ICON_HEART =
+  '<svg viewBox="0 0 7 7" aria-hidden="true">'+
+  '<path d="M1 0h2v1H1zM4 0h2v1H4zM0 1h7v2H0zM1 3h5v1H1zM2 4h3v1H2zM3 5h1v1H3z"/></svg>';
 /* The plus, seven cells wide like the locks. */
 const ICON_PLUS =
   '<svg viewBox="0 0 7 7" aria-hidden="true"><path d="M3 0h1v7H3zM0 3h7v1H0z"/></svg>';
@@ -857,6 +867,8 @@ const FLOATING=[
   {tag:'div', id_:'settings', props:{hidden:true}, onto:[
     {tag:'div', id_:'pageTop', pinned:'top', props:{hidden:true}, onto:[
       {tag:'h2', id_:'pageTitle', clip:true},
+      // On a theme's page: the heart that makes it a favorite.
+      {tag:'button', id_:'themeFav', cls:'bare', inner:ICON_HEART, props:{type:'button', hidden:true}},
       {tag:'button', id_:'pageBack', cls:'iconButton cross', inner:ICON_CROSS, props:{type:'button'}},
     ]},
     {tag:'div', cls:'group', page:'main', onto:[
@@ -879,6 +891,7 @@ const FLOATING=[
       {tag:'div', cls:'groupHead', onto:[
         {tag:'h2', text:'Theme'},
         {tag:'span', onto:[
+          {tag:'button', id_:'themeFavs', cls:'bare', inner:ICON_HEART, props:{type:'button'}},
           {tag:'button', id_:'themeSave', cls:'bare', inner:ICON_DISK, props:{type:'button'}},
           {tag:'button', id_:'themeAdd', cls:'bare', inner:ICON_PLUS, props:{type:'button'}},
         ]},
@@ -1086,6 +1099,10 @@ const HINTS={
     'Keeps every color in force now — the body, the buttons, the letters, the backing, the markup — as a new theme of your own. Name it and save.'],
   themeLoad:['Load theme',
     'Opens a file of themes saved by Repix — yours from another browser, or someone else\'s. A single theme is named first: its own name is offered. Several themes are added at once, each under its own name, or with a number if the name is taken.'],
+  themeFav:['Favorite',
+    'Marks this theme as a favorite: the heart lights up. Press it again to take the mark off.<br><br>The heart beside the disk in the settings then makes the arrows flip through your favorites only.'],
+  themeFavs:['Favorites only',
+    'Lit — the arrows flip through your favorite themes only; out — through all of them.<br><br>A theme becomes a favorite by the heart on its own page: press the theme\'s name to open it.'],
   themeSave:['Save themes to disk',
     'Your own themes, to tick and save in one file — to carry them to another browser or computer, or to give them away. Load the file there with the plus.'],
   saveToDisk:['Save to disk', 'Saves the ticked themes in one file.'],
@@ -1115,7 +1132,7 @@ const HINTS={
     'sizes':['Interface size',
       'How large everything is drawn — buttons, letters, knobs, the thickness of the grid lines.<br><br>Auto chooses by the size of your screen. The digits set it yourself: smaller leaves more room for the picture, larger is easier to read from a distance or on a dense screen.'],
     'btnReset':['Reset',
-      'Brings the colors back, undoing what you have changed by hand since.<br><br>A BUILT-IN theme returns to its own colors, as it came with the program. A theme OF YOUR OWN returns to the colors it was last applied with: its previous version, not the theme it was forked from.<br><br>Like every change here, it is kept only by Apply; Cancel puts back what stood before. Nothing else in the program is touched.'],
+      'Brings the colors back, undoing what you have changed by hand since.<br><br>A BUILT-IN theme returns to its own colors, as it came with the program. A theme OF YOUR OWN returns to its previous version: the colors it had before the last Apply, not the theme it was forked from.<br><br>Like every change here, it is kept only by Apply; Cancel puts back what stood before. Nothing else in the program is touched.'],
     'btnGuide':['Guide',
       'Everything you can do with the mouse, keys and fingers, in one list, and the licenses at its end.<br><br>The cross at its top brings the settings back. The menu itself closes by Repix, a click outside it, or Esc.'],
     'stepList':['What the show button cycles',
@@ -1205,8 +1222,8 @@ const STANDARD={
   // left in RGB / ms, never below `least` (RGB steps a millisecond).
   tint:{ms:60, least:1},
   // The pictures' view (see VIEW): let go on the way, it glides losing
-  // `decel` of its speed a millisecond — heavier than a scroll, no ice.
-  view:{decel:0.012},
+  // `decel` of its speed a millisecond — twelve times a scroll's: a brake, no ice.
+  view:{decel:0.048},
   // What the hand gives a knob (the slider, the field, the arrows) is KEPT
   // BY ITS RULE, in this order:
   //   outside  — past the range: 'clamp' (to the edge) or 'refuse';
@@ -1369,6 +1386,10 @@ function buildView(){
    (0 or 1): another stage is another height, and a hidden shelf stays
    hidden. */
 const SLIDING=[];
+/* A LAYOUT CHANGES A SHELF'S HEIGHT — a slid one takes its offset for the
+   new height in the same pass, before the engine sets out to move anything:
+   else its top would show for a moment and slide away again. */
+function reputSlid(){ for(const el of SLIDING) if(el._reput) el._reput(); }
 function gripOf(el){
   if(!el._grip){ el._grip=Object.assign(document.createElement('div'),{className:'grip'}); SLIDING.push(el); }
   return el._grip;
@@ -1610,6 +1631,9 @@ function makeSlides(el, ss){
   share = share>0.5 ? 1 : 0;
   el._slid=()=>share>=1;
   el._slide=v=>{ smoothly(()=>{ share=put(v ? tall() : 0); }); share=share>0.5?1:0; keep(); };
+  // Slid away, it stays away whatever its new height: the offset is put anew
+  // in the same layout that changed the height (see reputSlid).
+  el._reput=()=>{ if(!from && share>0) put(share*tall()); };
   let from=null;
   tab.addEventListener('pointerdown',e=>{
     if(e.button!==0) return;
@@ -2405,6 +2429,24 @@ function makeShutters(el, items, cover, way){
   el._edges=edges;
   return {shutter, edges};
 }
+/* A tile's paint, and its opposite for the frame of the one in hand: the
+   opposite side of the color circle (turquoise — coral), as saturated, and
+   on the other side in lightness, so it shows by both; its light edge and
+   its shadow edge. A grey has no hue: its opposite is only in lightness. */
+function paintTile(dd, color){
+  dd.style.background=color;
+  const c=(color.match(/\d+(\.\d+)?/g)||[]).slice(0,3).map(Number); if(c.length<3) return;
+  const [r,g,b]=c.map(v=>v/255), hi=Math.max(r,g,b), lo=Math.min(r,g,b), L=(hi+lo)/2;
+  let H=0, S=0;
+  if(hi>lo){
+    const d=hi-lo; S=d/(1-Math.abs(2*L-1));
+    H = hi===r ? ((g-b)/d+6)%6 : hi===g ? (b-r)/d+2 : (r-g)/d+4;
+  }
+  const oH=(H*60+180)%360, oS=S<0.12 ? 0 : Math.max(S, 0.6), oL=L<0.5 ? 0.75 : 0.28;
+  const hsl=l=>`hsl(${oH.toFixed(1)} ${(oS*100).toFixed(1)}% ${(Math.max(0,Math.min(1,l))*100).toFixed(1)}%)`;
+  dd.style.setProperty('--oppLight', hsl(oL+0.12));
+  dd.style.setProperty('--oppShade', hsl(oL-0.14));
+}
 function makeStrip(el, ss){
   el.classList.add('strip');
   const byKey=new Map();
@@ -2417,7 +2459,7 @@ function makeStrip(el, ss){
       for(const t of list){
         const dd=document.createElement('i'); dd.className='tile';
         for(const ff of ['held','dot','plus']) if(t[ff]) dd.classList.add(ff);
-        if(t.color) dd.style.background=t.color;
+        if(t.color) paintTile(dd, t.color);
         if(t.key!==undefined) byKey.set(String(t.key), dd);
         dd._tile=t;
         if(t.click) dd.onclick=e=>t.click(e);
@@ -2437,10 +2479,11 @@ function makeStrip(el, ss){
       if(dd) dd.classList.add(flag);
       return dd||null;
     },
+    // A tile shown goes to the middle of the strip, whether it was in view
+    // or not — by the engine's scroll, from its place in the layout.
     show(key){
       const dd=byKey.get(String(key)); if(!dd) return;
-      const r=dd.getBoundingClientRect(), rr=el.getBoundingClientRect();
-      if(r.left<rr.left||r.right>rr.right) el.scrollLeft += (r.left+r.width/2)-(rr.left+rr.width/2);
+      glideTo(el, 'x', dd.offsetLeft+dd.offsetWidth/2-el.clientWidth/2);
     },
     edges};
   // One listener for all tiles: there can be hundreds of them.
@@ -3794,6 +3837,7 @@ function relayout(forcibly){
       layoutPrint=viewPrint();
       squeezeSingles();
       for(const ff of AFTER_LAYOUT) ff();
+      reputSlid();
     });
   }
   smoothly(relayoutNow);
@@ -3812,6 +3856,7 @@ function relayoutNow(){
   alignCaptions();
   for(const where of fieldsNow()) fieldPrints.set(where, fieldPrint(where));
   for(const ff of AFTER_LAYOUT) ff();
+  reputSlid();
 }
 
 /* EVEN — an argument of an object's description: the buttons of each ROW
@@ -5424,7 +5469,9 @@ for(const hl of canvases){
     }
     if(!pull)return;
     const d=density();
-    view.x=pull.v.x-(e.clientX-pull.x)*d/view.mm; view.y=pull.v.y-(e.clientY-pull.y)*d/view.mm;
+    // Where the hand puts it; past the edge, the rubber's way.
+    const raw={mm:view.mm, x:pull.v.x-(e.clientX-pull.x)*d/view.mm, y:pull.v.y-(e.clientY-pull.y)*d/view.mm};
+    Object.assign(view, rubberView(raw));
     // The hand's way, for its speed when it lets go.
     const now=performance.now();
     pull.trail.push({t:now,x:view.x,y:view.y});
@@ -5979,7 +6026,25 @@ function holdIn(v){
   return v;
 }
 // On its way the view is kept by its goal (see VIEW), not frame by frame.
-function hold(){ if(!viewFlying()) holdIn(view); }
+// On its way it is kept by its goal (see VIEW); held by the hand, by the
+// rubber (rubberView) — frame by frame only when it stands.
+function hold(){ if(!viewFlying() && !pull) holdIn(view); }
+/* PULLED PAST THE EDGE the picture gives way a little and harder the
+   farther it is pulled — the scroll's stretch (STANDARD.stretch): at most
+   `reach` of the window, never more than `most` lines, reached when the hand
+   is twice that far out. */
+function rubberView(raw){
+  const kept=holdIn({...raw}), out={...kept};
+  const r=canvases[0].getBoundingClientRect(), d=density();
+  for(const [k,side] of [['x',r.width*d],['y',r.height*d]]){
+    const over=(raw[k]-kept[k])*raw.mm;                 // screen pixels past the edge
+    const reach=Math.min(side*STANDARD.stretch.reach, gridPixel()*d*STANDARD.line*STANDARD.stretch.most);
+    if(Math.abs(over)<1e-9 || reach<=0) continue;
+    const t=Math.min(1, Math.abs(over)/(2*reach));
+    out[k]=kept[k]+Math.sign(over)*reach*(1-(1-t)*(1-t))/raw.mm;
+  }
+  return out;
+}
 /* THE VIEW OF THE PICTURES GOES TO ITS GOAL — one view for both windows, so
    they never part. It is on the 'view' channel as one value: the picture's
    point under the ANCHOR (where the hand is, from the window's middle, in
@@ -6048,7 +6113,11 @@ function stopView(){ CHANNELS.get('view').on.delete(VIEW); VIEW.goal=null; }
 // The hand lets the picture go: with the speed it had (the last 80 ms), it
 // glides on and slows, and stops where the glide ends — kept in the windows.
 function letGoView(p){
-  if(!p || !p.trail || p.trail.length<2) return;
+  if(!p) return;
+  // Let go past the edge: the spring takes it back in (softer there).
+  const kept=holdIn({...view});
+  if(Math.abs(kept.x-view.x)>1e-9 || Math.abs(kept.y-view.y)>1e-9){ aimView(kept); VIEW.bounce=true; return; }
+  if(!p.trail || p.trail.length<2) return;
   const a=p.trail[0], b=p.trail[p.trail.length-1], dt=b.t-a.t;
   if(dt<=0 || performance.now()-b.t>80) return;           // it stood before it was let go
   const vx=(b.x-a.x)/dt, vy=(b.y-a.y)/dt, k=1/STANDARD.view.decel;
@@ -6294,6 +6363,7 @@ function takePaint(k){
   if(paintsField[k]<0) return;
   chosen=paintsField[k];
   markChosen();
+  $('#palette').strip.show(chosen);   // taken from the picture: shown in the middle
 }
 /* What is in hand is marked in place, without rebuilding the strip. */
 function markChosen(){
@@ -6342,7 +6412,7 @@ function setPaintRGB(nn, rgb){
   const kk=palette.find(x=>x.nn===nn);
   if(kk){ kk.r=rgb[0]; kk.g=rgb[1]; kk.b=rgb[2]; }
   const tile=$('#palette').strip.tile(nn);
-  if(tile) tile.style.background=`rgb(${rgb.join(',')})`;
+  if(tile) paintTile(tile, `rgb(${rgb.join(',')})`);
   litFor=-1;
 }
 /* EDITING A PAINT — double-click it in the strip. The same window as for the
@@ -6701,8 +6771,50 @@ function cancelStroke(){
 
    Computed in HSL: "the same, but lighter" is one number there. */
 /* THEMES are ready sets of the same colors, nothing more: no special rule,
-   no separate branch in the engine. The first one is the default. */
+   no separate branch in the engine. They stand by families, and from light
+   to dark; the default one (DEFAULT_THEME) is not the first but 98. */
 const THEMES=[
+  // LIGHT — paper and daylight, warm to cold.
+  // Paper: a fully light scheme — light works that merge with a dark window
+  // are well visible on it.
+  {name:'Paper', colors:{hull:'#e8e4d9', accent:'#b5502a', markup:'#2f6fb5',
+                       canvas:'#cfc9bb', buttons:'#d8d2c4', text:'#2b2a26',
+                       lockButtons:false, lockText:false, auto:true, theme:'Paper'}},
+  // Street: a city poster - cream paper, the dark green of shop signs
+  // for the buttons, a red-orange accent.
+  {name:'Street', colors:{hull:'#f7f1e1', accent:'#e0552e', markup:'#2f6fb5',
+      canvas:'#e9dfc8', buttons:'#1f4a40', text:'#1a2a30',
+      lockButtons:false, lockText:false, auto:true, theme:'Street'}},
+  // Lemonade: a glass of ice, orange-slice buttons, a mint accent.
+  {name:'Lemonade', colors:{hull:'#f6f1e7', accent:'#4fae3a', markup:'#2f6fb5',
+      canvas:'#ece3d2', buttons:'#f0a040', text:'#3f2a12',
+      lockButtons:false, lockText:false, auto:true, theme:'Lemonade'}},
+  // Dune: the desert — sand, terracotta buttons, the turquoise of a
+  // nomad's jewel as the accent.
+  {name:'Dune', colors:{hull:'#e8d3a9', accent:'#1f9c93', markup:'#c2185b',
+      canvas:'#d9bf8e', buttons:'#c8744a', text:'#4a3322',
+      lockButtons:false, lockText:false, auto:true, theme:'Dune'}},
+  // Sakura: the second light theme, warmer than Paper — blossom and its
+  // branch: pink petals, the bark's brown in the letters, the buttons and
+  // behind the work.
+  {name:'Sakura', colors:{hull:'#f7ecef', accent:'#c0567a', markup:'#2f7d6a',
+                        canvas:'#e2cfc6', buttons:'#e3cbc2', text:'#5a3626',
+                        lockButtons:false, lockText:false, auto:true, theme:'Sakura'}},
+  // Lavender: Provence — lavender fields, olive buttons, a sunflower's
+  // yellow for the accent.
+  {name:'Lavender', colors:{hull:'#e6def0', accent:'#e9b52a', markup:'#2f7d6a',
+      canvas:'#d8cde6', buttons:'#a3a86a', text:'#3b3350',
+      lockButtons:false, lockText:false, auto:true, theme:'Lavender'}},
+  // Fuji: a sky-blue morning, snow on the buttons, the pink of dawn.
+  {name:'Fuji', colors:{hull:'#e3f1fb', accent:'#e87a9a', markup:'#ff6b00',
+      canvas:'#cfe4f4', buttons:'#f7f9fc', text:'#253a52',
+      lockButtons:false, lockText:false, auto:true, theme:'Fuji'}},
+  // Fjord: the third light theme, the North — snow, slate rock for the
+  // buttons, the red of a wooden cabin as the accent, cold stone letters.
+  {name:'Fjord', colors:{hull:'#e9eef0', accent:'#b5402f', markup:'#2f7d6a',
+                       canvas:'#d7e0e5', buttons:'#b8c7d1', text:'#22313a',
+                       lockButtons:false, lockText:false, auto:true, theme:'Fjord'}},
+  // OLD MACHINES — the screens and halls pixel art was born in.
   // The backing under the work is the desktop teal, panels and buttons silver,
   // the title-bar blue as the accent.
   // Buttons and text have their own colors here (silver level with the
@@ -6710,69 +6822,284 @@ const THEMES=[
   {name:'98', colors:{hull:'#c0c0c0', accent:'#000080', markup:'#00a800',
                     canvas:'#008080', buttons:'#c0c0c0', text:'#000000',
                     lockButtons:false, lockText:false, auto:true, theme:'98'}},
+  // Retro: a slate-blue body, cream buttons, a plum canvas, black letters and
+  // a white accent — an old pixel editor's desk.
+  {name:'Retro', colors:{hull:'#7f939e', accent:'#ffffff', markup:'#ff1aff',
+                       canvas:'#675762', buttons:'#d3ccbd', text:'#000000',
+                       lockButtons:false, lockText:false, auto:true, theme:'Retro'}},
+  // Famicom: the console itself — its maroon, cream buttons, the gold of
+  // its lettering.
+  {name:'Famicom', colors:{hull:'#7a1f24', accent:'#d9a441', markup:'#5cf2c8',
+      canvas:'#4a1216', buttons:'#e6dcc2', text:'#f4ecd8',
+      lockButtons:false, lockText:false, auto:true, theme:'Famicom'}},
+  // Arcade: a dark hall of cabinets, red joystick buttons, the yellow
+  // of a token for the accent.
+  {name:'Arcade', colors:{hull:'#0e0e14', accent:'#ffd21f', markup:'#5cf2c8',
+      canvas:'#050508', buttons:'#b8231c', text:'#f0f0f0',
+      lockButtons:false, lockText:false, auto:true, theme:'Arcade'}},
+  // BAR — a drink each, light to dark.
+  // Champagne: a cream glass, gold bubbles for the accent.
+  {name:'Champagne', colors:{hull:'#f3ead2', accent:'#c9a227', markup:'#2f6fb5',
+      canvas:'#e8dcbc', buttons:'#e2cf9f', text:'#4a3b1f',
+      lockButtons:false, lockText:false, auto:true, theme:'Champagne'}},
+  // Mojito: crushed ice, mint buttons, a lime accent, dark-rum letters.
+  {name:'Mojito', colors:{hull:'#e4f2e1', accent:'#5aa31f', markup:'#c2185b',
+      canvas:'#d2e8cf', buttons:'#9fd8a8', text:'#3a2618',
+      lockButtons:false, lockText:false, auto:true, theme:'Mojito'}},
+  // Tequila, a shot: salt on the rim, lime buttons, a gold accent.
+  {name:'Tequila', colors:{hull:'#e8dcc2', accent:'#e0a526', markup:'#2f6fb5',
+      canvas:'#d8c9a8', buttons:'#b9d45a', text:'#3a3320',
+      lockButtons:false, lockText:false, auto:true, theme:'Tequila'}},
+  // Martini: a cold silver glass, olive buttons, the red heart of the
+  // olive for the accent.
+  {name:'Martini', colors:{hull:'#9aa3a8', accent:'#c8302c', markup:'#1f6fff',
+      canvas:'#6f787d', buttons:'#7d8a3c', text:'#1c2224',
+      lockButtons:false, lockText:false, auto:true, theme:'Martini'}},
+  // Lagoon (Blue Lagoon): curacao blue, ice-cube buttons, a lemon accent.
+  {name:'Lagoon', colors:{hull:'#0b4f9e', accent:'#f2e14c', markup:'#ff6fb5',
+      canvas:'#073a78', buttons:'#bfe6f2', text:'#eaf6ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Lagoon'}},
+  // Negroni: ruby, orange-peel buttons, the gold of vermouth.
+  {name:'Negroni', colors:{hull:'#6e1420', accent:'#e8b84a', markup:'#5cf2c8',
+      canvas:'#420b13', buttons:'#d9642a', text:'#f8e8d8',
+      lockButtons:false, lockText:false, auto:true, theme:'Negroni'}},
+  // Wine: bordeaux, cork buttons, the rose glint in a glass.
+  {name:'Wine', colors:{hull:'#4a1024', accent:'#f08aa6', markup:'#5cf2c8',
+      canvas:'#2c0914', buttons:'#b08a5e', text:'#f3e3e8',
+      lockButtons:false, lockText:false, auto:true, theme:'Wine'}},
+  // Whisky: a dark oak cask, amber buttons, the gold of the label,
+  // letters like ice.
+  {name:'Whisky', colors:{hull:'#3b2414', accent:'#e8c15a', markup:'#5fd0ff',
+      canvas:'#24150b', buttons:'#b36a1e', text:'#f5ead6',
+      lockButtons:false, lockText:false, auto:true, theme:'Whisky'}},
+  // Absinthe, the green fairy: a dark bottle, wormwood buttons, the
+  // sugar cube on the spoon for the accent.
+  {name:'Absinthe', colors:{hull:'#16241a', accent:'#f2efe4', markup:'#ff6fb5',
+      canvas:'#0d170f', buttons:'#6f9e3a', text:'#dfeecf',
+      lockButtons:false, lockText:false, auto:true, theme:'Absinthe'}},
+  // Espresso: a dark roast, crema buttons, the copper of the pot.
+  {name:'Espresso', colors:{hull:'#24170f', accent:'#c87533', markup:'#5fd0ff',
+      canvas:'#150d08', buttons:'#c9a27a', text:'#f0e2cf',
+      lockButtons:false, lockText:false, auto:true, theme:'Espresso'}},
+  // SODA — loud cans and bottles.
+  // Cola: a red can, the white script as the accent, dark cola buttons and
+  // behind the work.
+  {name:'Cola', colors:{hull:'#b5121b', accent:'#fff8f0', markup:'#5cf2c8',
+      canvas:'#1c0b06', buttons:'#3a1a10', text:'#fff8f0',
+      lockButtons:false, lockText:false, auto:true, theme:'Cola'}},
+  // Fizz: a blue can with a red band and white letters.
+  {name:'Fizz', colors:{hull:'#004b93', accent:'#ffffff', markup:'#ffe34d',
+      canvas:'#002a5c', buttons:'#e32934', text:'#f2f6ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Fizz'}},
+  // Dew: a green bottle, neon-green buttons, a red accent.
+  {name:'Dew', colors:{hull:'#0f3d1f', accent:'#e0201b', markup:'#ffe34d',
+      canvas:'#07240f', buttons:'#9ee62a', text:'#f4ffd9',
+      lockButtons:false, lockText:false, auto:true, theme:'Dew'}},
+  // WARM — wood, earth, tea and moss, lighter to darker; the greens together.
+  // Workshop: an artist's studio — grey canvas, the raw wood of the easel
+  // for the buttons, a stroke of cinnabar for the accent.
+  {name:'Workshop', colors:{hull:'#8a8780', accent:'#d8392b', markup:'#2fd0ff',
+      canvas:'#5e5b55', buttons:'#c9a77c', text:'#1e1c1a',
+      lockButtons:false, lockText:false, auto:true, theme:'Workshop'}},
+  // Autumn: a maple park — walnut earth, rust leaves for the buttons, a
+  // golden leaf as the accent, the dark of the fir trees behind the work.
+  {name:'Autumn', colors:{hull:'#3a2a1e', accent:'#f0b43c', markup:'#5cc8f2',
+                        canvas:'#1f2a1f', buttons:'#8c4a2a', text:'#f2e6cf',
+                        lockButtons:false, lockText:false, auto:true, theme:'Autumn'}},
+  // Matcha: a tea ceremony — dark roasted wood, whisked matcha for the
+  // buttons, the red lacquer of the tray as the accent, rice-paper letters.
+  {name:'Matcha', colors:{hull:'#2e2419', accent:'#c9463d', markup:'#5fd0ff',
+                        canvas:'#1d170f', buttons:'#6d7f45', text:'#eee4cc',
+                        lockButtons:false, lockText:false, auto:true, theme:'Matcha'}},
   // Moss: a dark olive body with an orange accent; buttons and text follow
   // the body (both locks closed).
   {name:'Moss', colors:{hull:'#121609', accent:'#ff9d2e', markup:'#3ddc6b',
                       canvas:'#121609', buttons:'#3e4c1f', text:'#f1f3ed',
                       lockButtons:true, lockText:true, auto:true, theme:'Moss'}},
+  // Library: an old reading room — green leather bindings, parchment
+  // buttons, gold tooling for the accent, ink and paper letters.
+  {name:'Library', colors:{hull:'#1f3a2e', accent:'#d4af37', markup:'#ff6fb5',
+      canvas:'#152820', buttons:'#d8c8a0', text:'#efe6cf',
+      lockButtons:false, lockText:false, auto:true, theme:'Library'}},
+  // Terrarium: glass and moss, a bright green lizard for the accent.
+  {name:'Terrarium', colors:{hull:'#1e2b22', accent:'#8be04a', markup:'#ff6fb5',
+      canvas:'#121b15', buttons:'#4d6b3a', text:'#e3efd9',
+      lockButtons:false, lockText:false, auto:true, theme:'Terrarium'}},
+  // Sushi: dark nori, rice buttons, salmon pink for the accent.
+  {name:'Sushi', colors:{hull:'#1b2320', accent:'#f28c73', markup:'#5cf2c8',
+      canvas:'#0f1512', buttons:'#eee8da', text:'#f2eee4',
+      lockButtons:false, lockText:false, auto:true, theme:'Sushi'}},
+  // Cabin: a winter evening — snowy night blue outside, warm wooden
+  // buttons inside, the amber light of the window as the accent.
+  {name:'Cabin', colors:{hull:'#1d2b44', accent:'#ffb347', markup:'#5cf2c8',
+      canvas:'#121c2e', buttons:'#7a5234', text:'#f2ead8',
+      lockButtons:false, lockText:false, auto:true, theme:'Cabin'}},
+  // Candle: a dark room, wax buttons, the flame for the accent.
+  {name:'Candle', colors:{hull:'#1a1512', accent:'#ffb02e', markup:'#5fd0ff',
+      canvas:'#0f0c0a', buttons:'#e9dcc0', text:'#f3e7cf',
+      lockButtons:false, lockText:false, auto:true, theme:'Candle'}},
+  // COLD — water and the night sky.
+  // Pop: pop-art turquoise and coral, white buttons.
+  {name:'Pop', colors:{hull:'#2ab6d9', accent:'#e66546', markup:'#ffe34d',
+      canvas:'#0d81be', buttons:'#f4f1e8', text:'#0b2a33',
+      lockButtons:false, lockText:false, auto:true, theme:'Pop'}},
+  // Ocean: a reef in the sun — shallow turquoise water, soft green
+  // seaweed for the buttons, the corals' pink for the accent and their
+  // yellow, like sunlit sand, in the letters.
+  {name:'Ocean', colors:{hull:'#17657a', accent:'#ffa3b1', markup:'#ffe066',
+                       canvas:'#0f4c5e', buttons:'#3f8a68', text:'#fff3c8',
+                       lockButtons:false, lockText:false, auto:true, theme:'Ocean'}},
+  // Koi: an emerald pond, lotus-leaf buttons, an orange carp.
+  {name:'Koi', colors:{hull:'#0c4f4a', accent:'#ff7a1f', markup:'#ffd84d',
+      canvas:'#073a37', buttons:'#3f8f3a', text:'#e6f4ee',
+      lockButtons:false, lockText:false, auto:true, theme:'Koi'}},
+  // Blueprint: blue drafting paper, white lines, the wood of a pencil
+  // for the accent.
+  {name:'Blueprint', colors:{hull:'#1d4f9e', accent:'#d9a066', markup:'#ffd84d',
+      canvas:'#133d80', buttons:'#3a6fd8', text:'#f4f8ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Blueprint'}},
+  // Aurora: the northern lights — a dark sky, the lights' green for the
+  // buttons, their violet edge for the accent, snow letters.
+  {name:'Aurora', colors:{hull:'#0f1a2b', accent:'#b57bff', markup:'#ffd84d',
+      canvas:'#081018', buttons:'#1f7a6a', text:'#eaf6ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Aurora'}},
+  // Cosmos: the night sky — deep navy, violet nebula buttons, one yellow
+  // star for the accent, starlight letters.
+  {name:'Cosmos', colors:{hull:'#151a33', accent:'#ffd86b', markup:'#5cf2c8',
+                        canvas:'#0a0d1f', buttons:'#3d3a6b', text:'#e4e2ff',
+                        lockButtons:false, lockText:false, auto:true, theme:'Cosmos'}},
+  // DARK — nights with a story; the plain dark workroom last.
+  // Eclipse: the black sun, its gold corona for the accent.
+  {name:'Eclipse', colors:{hull:'#08080c', accent:'#f2c14e', markup:'#5cf2c8',
+      canvas:'#000000', buttons:'#26262e', text:'#e8e8f0',
+      lockButtons:false, lockText:false, auto:true, theme:'Eclipse'}},
+  // Noir: a black-and-white film, light through the blinds, red lipstick
+  // for the accent.
+  {name:'Noir', colors:{hull:'#141414', accent:'#c8102e', markup:'#5cf2c8',
+      canvas:'#0a0a0a', buttons:'#3a3a3a', text:'#e8e4dc',
+      lockButtons:false, lockText:false, auto:true, theme:'Noir'}},
+  // Forge: soot, iron buttons, the glow of hot metal.
+  {name:'Forge', colors:{hull:'#1c1b1a', accent:'#ff7a1a', markup:'#5fd0ff',
+      canvas:'#0f0e0e', buttons:'#5a5d62', text:'#ece6dc',
+      lockButtons:false, lockText:false, auto:true, theme:'Forge'}},
+  // Magma: black basalt, lava buttons, the yellow glow of the crack.
+  {name:'Magma', colors:{hull:'#1a1412', accent:'#ffcc33', markup:'#5fd0ff',
+      canvas:'#0e0a09', buttons:'#b8400f', text:'#f5e6d0',
+      lockButtons:false, lockText:false, auto:true, theme:'Magma'}},
+  // Halloween: a black night, pumpkin buttons, a witch's purple accent.
+  {name:'Halloween', colors:{hull:'#140f1c', accent:'#9b59d0', markup:'#7cff5c',
+      canvas:'#0a0710', buttons:'#d9651c', text:'#f2e8d8',
+      lockButtons:false, lockText:false, auto:true, theme:'Halloween'}},
+  // Gothic: a black castle, violet velvet buttons, blood red for the
+  // accent, bone letters.
+  {name:'Gothic', colors:{hull:'#150c16', accent:'#b3122e', markup:'#5cf2c8',
+      canvas:'#0b060c', buttons:'#3b2438', text:'#e6dcc8',
+      lockButtons:false, lockText:false, auto:true, theme:'Gothic'}},
+  // Dungeon: a pixel RPG's crypt - dark stone, mossy stone buttons, the
+  // amber of a torch.
+  {name:'Dungeon', colors:{hull:'#1a1a1f', accent:'#ffa53a', markup:'#5fd0ff',
+      canvas:'#0d0d10', buttons:'#3f4a36', text:'#e0dccf',
+      lockButtons:false, lockText:false, auto:true, theme:'Dungeon'}},
+  // Firefly: a summer night in the woods, a firefly's yellow light.
+  {name:'Firefly', colors:{hull:'#0c1a17', accent:'#e8f25c', markup:'#ff6fb5',
+      canvas:'#06100d', buttons:'#1f3b2e', text:'#d9ecd8',
+      lockButtons:false, lockText:false, auto:true, theme:'Firefly'}},
+  // Abyss: the deep sea without light, the glow of a deep-sea fish.
+  {name:'Abyss', colors:{hull:'#050d17', accent:'#3ff2e0', markup:'#ff6fb5',
+      canvas:'#02060c', buttons:'#0e3a4a', text:'#cfe8ef',
+      lockButtons:false, lockText:false, auto:true, theme:'Abyss'}},
+  // Neon: a city at night - shop signs in magenta, cyan letters.
+  {name:'Neon', colors:{hull:'#0f0b24', accent:'#ff2fb3', markup:'#ffe34d',
+      canvas:'#07051a', buttons:'#2a1f5c', text:'#7ff6ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Neon'}},
+  // Synthwave: a purple night, pink grid buttons, the orange sun of the
+  // eighties.
+  {name:'Synthwave', colors:{hull:'#1b0f33', accent:'#ffb347', markup:'#5cf2c8',
+      canvas:'#0e0720', buttons:'#bf2a6f', text:'#fbe3ff',
+      lockButtons:false, lockText:false, auto:true, theme:'Synthwave'}},
   // Blender-like: charcoal background, grey widgets, an orange active accent.
   {name:'Blender', colors:{hull:'#1d1d1d', accent:'#ff8c00', markup:'#4772b3',
                          canvas:'#393939', buttons:'#545454', text:'#e5e5e5',
                          lockButtons:false, lockText:false, auto:true, theme:'Blender'}},
-  // Coffee: a warm dark body and a honey accent.
-  {name:'Cocoa', colors:{hull:'#241c14', accent:'#e8a33d', markup:'#6ec7a8',
-                       canvas:'#1b150f', buttons:'#4a3b2c', text:'#f0e6d8',
-                       lockButtons:false, lockText:false, auto:true, theme:'Cocoa'}},
-  // Paper: a fully light scheme — light works that merge with a dark window
-  // are well visible on it.
-  {name:'Paper', colors:{hull:'#e8e4d9', accent:'#b5502a', markup:'#2f6fb5',
-                       canvas:'#cfc9bb', buttons:'#d8d2c4', text:'#2b2a26',
-                       lockButtons:false, lockText:false, auto:true, theme:'Paper'}},
-  // Amber monitor: warm charcoal and amber, like old terminals.
-  {name:'Amber', colors:{hull:'#1a1200', accent:'#ffb000', markup:'#00d0ff',
-                       canvas:'#0f0a00', buttons:'#3a2a00', text:'#ffcc66',
-                       lockButtons:false, lockText:false, auto:true, theme:'Amber'}},
-  // Phosphor: green monochrome, the other classic screen of that era.
-  {name:'Phosphor', colors:{hull:'#001100', accent:'#33ff33', markup:'#ff5cf0',
-                          canvas:'#000a00', buttons:'#003a00', text:'#66ff66',
-                          lockButtons:false, lockText:false, auto:true, theme:'Phosphor'}},
-  // Night sea: deep blue with an icy accent.
-  {name:'Ocean', colors:{hull:'#0d1b2a', accent:'#4cc9f0', markup:'#ffb703',
-                       canvas:'#081420', buttons:'#1b3a5c', text:'#e0e6ed',
-                       lockButtons:false, lockText:false, auto:true, theme:'Ocean'}},
-  // Plum: dark violet, as pixel editors like it.
-  {name:'Plum', colors:{hull:'#1e1526', accent:'#d17bf0', markup:'#7bf0a8',
-                      canvas:'#150f1c', buttons:'#3b2a4a', text:'#ece2f2',
-                      lockButtons:false, lockText:false, auto:true, theme:'Plum'}},
-  // Sakura: the second light theme, warmer than Paper.
-  {name:'Sakura', colors:{hull:'#f7ecef', accent:'#c0567a', markup:'#2f7d6a',
-                        canvas:'#ead9de', buttons:'#e8d3da', text:'#35262b',
-                        lockButtons:false, lockText:false, auto:true, theme:'Sakura'}},
 ];
-const DEFAULT_COLORS=THEMES[0].colors;
-/* OWN THEMES — made with the plus from the colors in force, named "Own 1",
-   "Own 2"… They stand after the built-in ones, are remembered, and only they
-   can be removed with the minus. */
-let ownThemes=[];
-const allThemes=()=>THEMES.concat(ownThemes);
-const isOwnTheme=name=>ownThemes.some(x=>x.name===name);
-function recallOwnThemes(){
+const DEFAULT_THEME='98';
+const DEFAULT_COLORS=THEMES.find(tt=>tt.name===DEFAULT_THEME).colors;
+const THEME_COLORS=['hull','accent','markup','canvas','buttons','text'];
+const THEME_FLAGS=['lockButtons','lockText','auto'];
+/* THEMES ARE ONE LIST, one record each: its name, its colors in force, and
+   `back` — what Reset brings: a built-in theme's factory colors, an own
+   theme's previous version (what it had before the last Apply). Own themes
+   (`own`) — made with the plus from the colors in force, named "Own 1",
+   "Own 2"…, or loaded — stand after the built-in ones, and only they can be
+   renamed, deleted and saved to disk. Everything else is the same for all.
+   Kept: every own theme, and a built-in one only while it differs from how
+   it came (so a new version of the program can bring new factory colors). */
+const pickColors=cc=>{ const o={}; for(const kk of THEME_COLORS.concat(THEME_FLAGS)) o[kk]=cc[kk]; return o; };
+const sameColors=(a,b)=>THEME_COLORS.concat(THEME_FLAGS).every(kk=>a[kk]===b[kk]);
+let themeList=THEMES.map(tt=>({name:tt.name, colors:pickColors(tt.colors), back:pickColors(tt.colors)}));
+const allThemes=()=>themeList;
+const ownThemes=()=>themeList.filter(tt=>tt.own);
+const themeOf=name=>themeList.find(tt=>tt.name===name);
+const isOwnTheme=name=>{ const tt=themeOf(name); return !!(tt && tt.own); };
+const themeColors=tt=>({...tt.colors, theme:tt.name});
+function recallThemes(){
+  const good=cc=>cc && /^#[0-9a-f]{6}$/i.test(cc.hull||'') && /^#[0-9a-f]{6}$/i.test(cc.accent||'');
+  const fill=cc=>pickColors({...DEFAULT_COLORS, ...cc});
+  let kept=null;
+  try{ kept=JSON.parse(localStorage.getItem('repix.themeList')||'null'); }catch(_){}
+  if(!Array.isArray(kept)){
+    // From the earlier records: own themes apart, a built-in's edits apart.
+    kept=[];
+    try{
+      const own=JSON.parse(localStorage.getItem('repix.themes')||'[]');
+      if(Array.isArray(own)) for(const tt of own) if(tt) kept.push({name:tt.name, colors:tt.colors, own:true});
+      const edits=JSON.parse(localStorage.getItem('repix.themeEdits')||'{}');
+      if(edits && typeof edits==='object') for(const name in edits) kept.push({name, colors:edits[name]});
+    }catch(_){}
+  }
+  for(const tt of kept){
+    if(!tt || typeof tt.name!=='string' || !good(tt.colors)) continue;
+    let name=tt.name;
+    const was=themeOf(name);
+    if(was && !was.own && !tt.own){ was.colors=fill(tt.colors); continue; }
+    // An own theme under a name a built-in one has since taken: the same
+    // colors — it has become that theme; others — it stays, with a number.
+    if(was && !was.own && sameColors(fill(tt.colors), was.back)) continue;
+    if(was) for(let n=2; themeOf(name); n++) name=tt.name.slice(0, THEME_NAME_MAX-String(n).length-1)+' '+n;
+    themeList.push({name, colors:fill(tt.colors), back:fill(good(tt.back) ? tt.back : tt.colors), own:true});
+  }
+}
+function saveThemes(){
+  const out=themeList.filter(tt=>tt.own || !sameColors(tt.colors, tt.back))
+    .map(tt=>tt.own ? {name:tt.name, colors:tt.colors, back:tt.back, own:true} : {name:tt.name, colors:tt.colors});
+  try{ localStorage.setItem('repix.themeList', JSON.stringify(out)); }catch(_){}
+}
+/* FAVORITES — names of themes marked by the heart, and whether the arrows
+   flip through them only. Kept apart from the themes: a mark, not a color. */
+let favThemes=new Set(), favOnly=false;
+function recallFavs(){
   try{
-    const tt=JSON.parse(localStorage.getItem('repix.themes')||'[]');
-    if(Array.isArray(tt)) ownThemes=tt.filter(x=>x && typeof x.name==='string' && x.colors
-      && /^#[0-9a-f]{6}$/i.test(x.colors.hull||'') && /^#[0-9a-f]{6}$/i.test(x.colors.accent||''));
+    const tt=JSON.parse(localStorage.getItem('repix.favThemes')||'[]');
+    if(Array.isArray(tt)) favThemes=new Set(tt.filter(n=>typeof n==='string' && themeOf(n)));
+    favOnly=localStorage.getItem('repix.favOnly')==='1' && favThemes.size>0;
   }catch(_){}
 }
-function saveOwnThemes(){
-  try{ localStorage.setItem('repix.themes', JSON.stringify(ownThemes)); }catch(_){}
+function saveFavs(){
+  try{
+    localStorage.setItem('repix.favThemes', JSON.stringify([...favThemes]));
+    localStorage.setItem('repix.favOnly', favOnly ? '1' : '0');
+  }catch(_){}
+}
+/* A new own theme: its previous version is itself. */
+function addTheme(name, cc){
+  const tt={name, colors:pickColors(cc), back:pickColors(cc), own:true};
+  themeList.push(tt); return tt;
 }
 /* A THEMES FILE is JSON: {"repix":"themes", "version":1, "themes":[{"name":…,
    "colors":{…}}, …]}; a single theme ({"repix":"theme", "name", "colors"}) is
    read too. The names are the file's header: loading offers them. Colors that
    are missing or not colors are taken from the default theme; a theme without
    its body and accent is skipped, and a file with none left is refused. */
-const THEME_COLORS=['hull','accent','markup','canvas','buttons','text'];
-const THEME_FLAGS=['lockButtons','lockText','auto'];
 function readThemesFile(text){
   try{
     const ff=JSON.parse(text);
@@ -6803,7 +7130,7 @@ function saveThemesFile(list){
 const RENAMED_THEMES={'Repix':'Moss'};
 const knownTheme=name=>{
   const nn=RENAMED_THEMES[name]||name;
-  return allThemes().some(x=>x.name===nn) ? nn : THEMES[0].name;
+  return allThemes().some(x=>x.name===nn) ? nn : DEFAULT_THEME;
 };
 function vvHSL(hex){
   const ch_=parseInt(hex.slice(1),16);
@@ -6901,6 +7228,15 @@ function deriveBase(hull,accent,markup,canvas,buttons,text){
   /* THE ALARM is the accent's neighbour on the hue circle, lighter: it warns
      (the doubt label) and marks the grid line under the hand. */
   const alarm=fromWhatHSL(aa.H+22, Math.min(100,aa.S), Math.min(88,aa.L+16));
+  /* DARKER, NOT LOUDER. In HSL a pale color taken darker at the same
+     saturation grows much stronger: a soft pink turns into a scarlet. So its
+     strength (chroma) is kept no greater than its own — a pastel goes dusty,
+     a strong color stays as strong. */
+  const darker=(c, by, least)=>{
+    const L2=Math.max(least, c.L-by), chroma=(100-Math.abs(2*c.L-100))*c.S/100;
+    const room=100-Math.abs(2*L2-100);
+    return fromWhatHSL(c.H, Math.min(100, c.S, room>0 ? chroma*100/room : 100), L2);
+  };
   return {
     '--bg':    hull,
     '--panel': fromWhatHSL(kk.H, S, sv(+6)),
@@ -6921,8 +7257,8 @@ function deriveBase(hull,accent,markup,canvas,buttons,text){
     '--press': kvt(-6),
     '--accent':      accent,
     '--accentLight':  fromWhatHSL(aa.H, Math.min(100,aa.S*1.05), Math.min(92,aa.L+22)),
-    '--accentShade':  fromWhatHSL(aa.H, Math.min(100,aa.S), Math.max(6,aa.L-30)),
-    '--accentHover':fromWhatHSL(aa.H, Math.min(100,aa.S), Math.max(10,aa.L-24)),
+    '--accentShade':  darker(aa, 30, 6),
+    '--accentHover':darker(aa, 24, 10),
     '--alarm':     alarm,
     // The backing under the work: a color of its own, derived from nothing.
     '--canvas':     canvas||hull,
@@ -7204,7 +7540,7 @@ function applyColors(){
   }
   // The current theme's name is on the flipper itself; Reset returns to it.
   const themeNameEl=$('#themeName');
-  if(themeNameEl) themeNameEl.textContent=colors.theme||THEMES[0].name;
+  if(themeNameEl) themeNameEl.textContent=colors.theme||DEFAULT_THEME;
   const title=$('#pageTitle'); if(title && $('#settings').dataset.page==='theme') title.textContent=colors.theme;
   // Header buttons repaint themselves, canvases do not: the caption color and
   // the backing around the work are taken at drawing time — once a frame,
@@ -7357,7 +7693,7 @@ function setupSettings(){
   fitGrid();
   recallFlipping();
   buildStepList();
-  recallOwnThemes(); recallColors(); applyColors();
+  recallThemes(); recallFavs(); recallColors(); applyColors();
   const win=$('#settings'), plate=$('#name'), guide=$('#guide');
   const opened=()=>!win.hasAttribute('hidden');
   /* THE PAGES of the menu window: a title for the top row, whether the page is
@@ -7391,7 +7727,7 @@ function setupSettings(){
     const pad=gridPixel()*FLOAT_EDGE;
     win._fitHeight=()=>{ win.style.maxHeight = PAGES[page()].tall ? Math.max(pad*20, innerHeight-plate.getBoundingClientRect().bottom-pad*2)+'px' : ''; };
     win._fitHeight();
-    refreshOwnRow();
+    refreshOwnRow(); refreshFav();
     if(pp==='save') buildSavePick();
     divideGroups(win); divideGroups(guide); evenOut();
     closeColorPicker(); win.scrollTop=0;
@@ -7497,9 +7833,13 @@ function setupSettings(){
   const themeRow=$('#themes');
   if(themeRow && !themeRow.children.length){
     const stepTheme=dd=>{
-      const all=allThemes(), i=all.findIndex(x=>x.name===colors.theme);
-      const tt=all[((i<0?0:i)+dd+all.length)%all.length];
-      colors={...tt.colors}; applyColors(); saveColors();
+      const all=favOnly ? allThemes().filter(x=>favThemes.has(x.name)) : allThemes();
+      if(!all.length) return;
+      // Out of the list (a theme that is not a favorite): the first one
+      // forward, the last one back.
+      const i=all.findIndex(x=>x.name===colors.theme);
+      const tt = i<0 ? all[dd>0 ? 0 : all.length-1] : all[(i+dd+all.length)%all.length];
+      colors=themeColors(tt); applyColors(); saveColors();
     };
     const arrow=(text,dd)=>buildNode({tag:'button', cls:'themeArrow', text, hug:true,
       click:e=>{ e.stopPropagation(); stepTheme(dd); }});
@@ -7511,7 +7851,7 @@ function setupSettings(){
       // pressed in a row, and text under the hand would cover the colors being
       // compared.
       buildNode({tag:'button', id_:'themeName', cls:'themeName', clip:true,
-        text:colors.theme||THEMES[0].name, hint:HINTS.themes,
+        text:colors.theme||DEFAULT_THEME, hint:HINTS.themes,
         click:e=>{ e.stopPropagation(); goTo('theme'); }}),
       arrow('>',+1));
   }
@@ -7530,9 +7870,8 @@ function setupSettings(){
   };
   const ownName=()=>{ let n=1; while(allThemes().some(x=>x.name==='Own '+n)) n++; return 'Own '+n; };
   const addOwnTheme=(name, cc)=>{
-    colors={...cc, theme:name};
-    ownThemes.push({name, colors:{...colors}});
-    saveOwnThemes(); applyColors(); saveColors();
+    colors=themeColors(addTheme(name, cc));
+    saveThemes(); applyColors(); saveColors();
   };
   const nameIt=(title, value, save)=>{
     naming={title, save, old:value};
@@ -7558,13 +7897,13 @@ function setupSettings(){
     }
     // Several themes: each under its own name, or with a number if taken; the
     // first of them is put on.
-    const first=ownThemes.length;
+    let first=null;
     for(const tt of list){
-      const name=freeName(tt.name||fromFile);
-      ownThemes.push({name, colors:{...tt.colors, theme:name}});
+      const made=addTheme(freeName(tt.name||fromFile), tt.colors);
+      if(!first) first=made;
     }
-    saveOwnThemes();
-    colors={...ownThemes[first].colors}; applyColors(); saveColors(); home();
+    saveThemes();
+    colors=themeColors(first); applyColors(); saveColors(); home();
   };
   // The name is checked here: not empty, not one the list already has.
   const saveName=()=>{
@@ -7580,8 +7919,8 @@ function setupSettings(){
   /* THE THEME'S PAGE is editing: the colors change at once, so the change is
      seen, but they are only kept by Apply. Cancel — or closing the menu —
      puts back what stood when the page was opened. Apply on a theme of your
-     own writes the colors into it; on a built-in one they stay as your colors
-     on top of it (Reset brings the theme back). Renaming and deleting are for
+     writes the colors into the theme's record, the same for every theme (see
+     themeList); Reset goes to the record's `back`. Renaming and deleting are for
      your own themes only. */
   let editFrom=null;
   function beginEdit(){ editFrom={...colors}; }
@@ -7589,24 +7928,52 @@ function setupSettings(){
     if(!editFrom) return;
     colors={...editFrom}; editFrom=null; applyColors(); saveColors();
   }
+  // Apply: the theme takes the colors; what it had becomes its previous
+  // version (an own theme's; a built-in one goes back to its factory).
   function applyEdit(){
     editFrom=null;
-    const own=ownThemes.find(tt=>tt.name===colors.theme);
-    if(own){ own.colors={...colors}; saveOwnThemes(); }
+    const tt=themeOf(colors.theme);
+    if(tt && !sameColors(tt.colors, colors)){
+      if(tt.own) tt.back=tt.colors;
+      tt.colors=pickColors(colors); saveThemes();
+    }
     saveColors();
   }
   $('#themeApply').onclick=e=>{ e.stopPropagation(); applyEdit(); home(); };
   $('#themeCancel').onclick=e=>{ e.stopPropagation(); cancelEdit(); back(); };
   $('#newCancel').onclick=e=>{ e.stopPropagation(); back(); };
   $('#saveCancel').onclick=e=>{ e.stopPropagation(); back(); };
+  function refreshFav(){
+    const one=$('#themeFav'), all=$('#themeFavs');
+    if(one){ one.hidden = page()!=='theme'; one.classList.toggle('held', favThemes.has(colors.theme)); }
+    if(all){ all.disabled=!favThemes.size; all.classList.toggle('held', favOnly); }
+  }
+  $('#themeFav').onclick=e=>{ e.stopPropagation();
+    const n=colors.theme;
+    favThemes.has(n) ? favThemes.delete(n) : favThemes.add(n);
+    if(!favThemes.size) favOnly=false;
+    saveFavs(); refreshFav(); };
+  $('#themeFavs').onclick=e=>{ e.stopPropagation();
+    if(!favThemes.size) return;
+    favOnly=!favOnly; saveFavs(); refreshFav();
+    // Turned on over a theme that is not a favorite: the next favorite after
+    // it in the list is put on.
+    if(favOnly && !favThemes.has(colors.theme)){
+      const all=allThemes(), i=all.findIndex(x=>x.name===colors.theme);
+      for(let k=1; k<=all.length; k++){
+        const tt=all[((i<0?-1:i)+k)%all.length];
+        if(favThemes.has(tt.name)){ colors=themeColors(tt); applyColors(); saveColors(); break; }
+      }
+    }
+  };
   function refreshOwnRow(){ const rr=$('#ownThemeRow'); if(rr) rr.hidden = page()!=='theme' || !isOwnTheme(colors.theme); }
   /* SAVING TO DISK: the list of your themes, each ticked or not; pressing a
      name puts that theme on. The ticks live while the page is open. */
   const ticked=new Set();
   function buildSavePick(){
     const pick=$('#savePick'); pick.textContent='';
-    $('#saveComplaint').textContent = ownThemes.length ? '' : HINTS.noOwnThemes;
-    for(const tt of ownThemes){
+    $('#saveComplaint').textContent = ownThemes().length ? '' : HINTS.noOwnThemes;
+    for(const tt of ownThemes()){
       const box=buildNode({tag:'button', cls:'bare', hint:HINTS.savePickBox,
         click:e=>{ e.stopPropagation();
           ticked.has(tt.name) ? ticked.delete(tt.name) : ticked.add(tt.name); mark(); }});
@@ -7617,7 +7984,7 @@ function setupSettings(){
       const nameB=buildNode({tag:'button', cls:'pickName', clip:true, align:'start', text:tt.name,
         held:colors.theme===tt.name, hint:HINTS.savePickName,
         click:e=>{ e.stopPropagation();
-          colors={...tt.colors}; applyColors(); buildSavePick(); }});
+          colors=themeColors(tt); applyColors(); buildSavePick(); }});
       pick.append(box, nameB);
       mark();
     }
@@ -7627,14 +7994,14 @@ function setupSettings(){
   function putBack(){ if(tryFrom){ colors=tryFrom; tryFrom=null; applyColors(); } }
   $('#themeSave').onclick=e=>{ e.stopPropagation(); ticked.clear(); goTo('save'); };
   $('#saveToDisk').onclick=e=>{ e.stopPropagation();
-    const list=ownThemes.filter(tt=>ticked.has(tt.name));
+    const list=ownThemes().filter(tt=>ticked.has(tt.name));
     if(list.length){ saveThemesFile(list); back(); } };
   $('#themeRename').onclick=e=>{ e.stopPropagation();
     const old=colors.theme;
     nameIt('Rename theme', old, name=>{
-      colors.theme=name; applyEdit();
-      for(const tt of ownThemes) if(tt.name===old){ tt.name=name; tt.colors={...colors}; }
-      saveOwnThemes(); applyColors(); saveColors(); }); };
+      const tt=themeOf(old); if(tt) tt.name=name;
+      if(favThemes.delete(old)){ favThemes.add(name); saveFavs(); }
+      colors.theme=name; applyEdit(); saveThemes(); applyColors(); }); };
   /* ASKING: a page with the question and two answers; the answer "no" goes
      back to where one was. */
   let asking=null;
@@ -7651,10 +8018,11 @@ function setupSettings(){
     const name=colors.theme;
     ask('Delete theme?', `"${name}" will be removed from the list for good. A theme saved to disk can be loaded again.`, 'Delete', ()=>{
       const all=allThemes(), i=all.findIndex(x=>x.name===name);
-      ownThemes=ownThemes.filter(x=>x.name!==name);
-      saveOwnThemes(); editFrom=null;
-      colors={...all[i-1].colors}; applyColors(); saveColors(); home(); }); };
-  for(const id_ of ['themeAdd','themeSave','themeFork','themeLoad','themeRename','themeDelete','themeNameField','saveToDisk','themeApply','themeCancel'])
+      themeList=themeList.filter(x=>x.name!==name);
+      if(favThemes.delete(name)){ if(!favThemes.size) favOnly=false; saveFavs(); }
+      saveThemes(); editFrom=null;
+      colors=themeColors(all[i-1]); applyColors(); saveColors(); home(); }); };
+  for(const id_ of ['themeFav','themeFavs','themeAdd','themeSave','themeFork','themeLoad','themeRename','themeDelete','themeNameField','saveToDisk','themeApply','themeCancel'])
     attachHint($('#'+id_), HINTS[id_]);
   // The colors: swatches open the picker, locks flip; both explain themselves.
   for(const ck of COLOR_KNOBS){
@@ -7682,8 +8050,8 @@ function setupSettings(){
   /* Reset does not mean "factory defaults" but "back to the theme": whoever sits
      on Windows 98 and tweaked it is not thrown into another theme. */
   $('#btnReset').onclick=()=>{
-    const tt=allThemes().find(x=>x.name===colors.theme)||THEMES[0];
-    colors={...tt.colors};
+    const tt=themeOf(colors.theme)||themeOf(DEFAULT_THEME);
+    colors=themeColors({...tt, colors:tt.back});
     applyColors(); saveColors();
   };
 }
