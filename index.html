@@ -5118,6 +5118,7 @@ function refreshViewNow(){
   stripEdges();   // a strip moved — another width, the shutters too
   tell();
   fitCanvas();          // the canvas by its current place, not the previous one
+  redraw();             // what is shown has changed: drawn now (fitting draws only a canvas made anew)
 }
 const autoVisited=new Set();
 /* quiet — the move is not a step of its own: undo and redo walk the history,
