@@ -49,7 +49,7 @@ if(location.protocol==='https:'||location.hostname==='localhost'){
     --bg:#c0c0c0; --canvas:#008080; --panel:#c0c0c0; --field:#ffffff;
     --frameColor:#c0c0c0; --light:#ffffff; --shadow:#808080;
     --text:#000000; --quiet:#404040;
-    --accent:#000080; --accentLight:#1084d0; --accentShade:#000040;
+    --accent:#000080; --accentLight:#1084d0; --accentShade:#000040; --accentMark:#000080;
     --alarm:#a07800;
     /* SPACING IS COUNTED IN CELLS, not pixels: three cells stay three cells at
        any interface size. Both gaps derive from it — between groups one cell
@@ -250,9 +250,10 @@ if(location.protocol==='https:'||location.hostname==='localhost'){
     color:var(--text)}
   /* Under the mouse the accent that reads on the panel; held (a lit heart, a
      closed lock) the accent itself — an icon is a mark, not a line to read,
-     and the accent darkened for reading looks like a dimmer one. */
+     and the accent darkened for reading looks like a dimmer one — moved only
+     where it would be lost on the panel (--accentMark). */
   .bare:hover:not(:disabled){color:var(--accentText)}
-  .bare.held{color:var(--accent)}
+  .bare.held{color:var(--accentMark)}
   .bare svg{width:calc(var(--unit)*7);height:calc(var(--unit)*7);display:block;
     shape-rendering:crispEdges;fill:currentColor}
   /* A swatch is the same button with the same bevel: click it to choose. */
@@ -6094,10 +6095,104 @@ function autoPaints(record=true){
 }
 
 $('#file').onchange=e=>{const f=e.target.files[0]; if(f) fromFile(f);};
+/* THE WORK IS KEPT. The open work lives in the browser's own store
+   (IndexedDB) and comes back when the page opens again: after a closed tab, a
+   reload, a crash, a phone that unloaded the page in the background. Kept:
+   the source file itself, and the work's state — the knobs, the line fixes,
+   the stage, the view, both histories, and the painting (the paint field,
+   the paints, what is in hand). Nothing computed is kept: on return the
+   stages are counted again from the same knobs, and the painting is laid on
+   the merge it was made on.
+   A TRIGGER, NOT A CLOCK: every change of the work ends in tell() (the status
+   line) — there the keeping is asked for, and done once the hand rests a moment;
+   at once when the page is hidden (a phone may not come back). */
+const WORK_DB='repix', WORK_STORE='work', WORK_REST=800;
+let workDb=null, workId=0, waitKeep=null, pendingPaint=null;
+function openWorkDb(){
+  if(!window.indexedDB) return Promise.reject();
+  return workDb || (workDb=new Promise((ok,fail)=>{
+    const rq=indexedDB.open(WORK_DB, 1);
+    rq.onupgradeneeded=()=>rq.result.createObjectStore(WORK_STORE);
+    rq.onsuccess=()=>ok(rq.result);
+    rq.onerror=()=>{ workDb=null; fail(rq.error); };
+  }));
+}
+async function workPut(key, value){
+  try{
+    const db=await openWorkDb();
+    await new Promise((ok,fail)=>{
+      const tx=db.transaction(WORK_STORE,'readwrite');
+      tx.objectStore(WORK_STORE).put(value, key);
+      tx.oncomplete=ok; tx.onerror=()=>fail(tx.error); tx.onabort=()=>fail(tx.error);
+    });
+  }catch(_){}                       // no store (a private window): the work lives as before
+}
+async function workGet(key){
+  try{
+    const db=await openWorkDb();
+    return await new Promise((ok,fail)=>{
+      const rq=db.transaction(WORK_STORE).objectStore(WORK_STORE).get(key);
+      rq.onsuccess=()=>ok(rq.result); rq.onerror=()=>fail(rq.error);
+    });
+  }catch(_){ return null; }
+}
+function workState(){
+  return {id:workId, at:capture(), touched, adviceGiven, splitByHand,
+    view:{x:view.x, y:view.y, mm:view.mm},
+    undo:{back:UNDO.back.slice(), forward:UNDO.forward.slice()},
+    paint: paintsField ? {field:paintsField, colors:paintColors, palette,
+      back:RECOLOR.back.slice(), forward:RECOLOR.forward.slice(), chosen, copied} : null};
+}
+function keepWorkNow(){
+  clearTimeout(waitKeep); waitKeep=null;
+  if(hasImage && workId) workPut('state', workState());
+}
+function keepWork(){
+  if(!hasImage || !workId) return;
+  clearTimeout(waitKeep);
+  waitKeep=setTimeout(keepWorkNow, WORK_REST);
+}
+addEventListener('visibilitychange',()=>{ if(document.hidden && waitKeep) keepWorkNow(); });
+addEventListener('pagehide',()=>{ if(waitKeep) keepWorkNow(); });
+/* THE PAINTING COMES BACK onto the merge it was made on: the same knobs and
+   line fixes, the same size. On any other merge it is dropped, as a live
+   painting is dropped when the merge is counted anew. */
+function installPaint(pp){
+  if(!pp || !buf3) return false;
+  const nw=buf3.width, nh=buf3.height, at=pp.at;
+  const same = pp.field.length===nw*nh && at
+    && sameFixes(at.fixes.x, fixes.x) && sameFixes(at.fixes.y, fixes.y)
+    && Object.keys(at.val).every(kk=>at.val[kk]===val[kk]);
+  if(!same) return false;
+  if(!buf4||buf4.width!==nw||buf4.height!==nh){
+    buf4=new OffscreenCanvas(nw,nh); bk4=buf4.getContext('2d'); bk4.imageSmoothingEnabled=false;
+  }
+  paintsField=pp.field; paintColors=pp.colors; palette=pp.palette;
+  RECOLOR.back.length=0; RECOLOR.back.push(...pp.back);
+  RECOLOR.forward.length=0; RECOLOR.forward.push(...pp.forward);
+  chosen=pp.chosen; copied=pp.copied;
+  writeRecolor(); refreshForward();
+  return true;
+}
+/* THE WORK OPEN BEFORE comes back when the page opens — unless a picture came
+   with the opening itself (opened with Repix). */
+async function recallWork(){
+  const src=await workGet('source');
+  if(!src || !src.file || hasImage || opening) return;
+  const st=await workGet('state');
+  if(hasImage || opening) return;
+  fromFile(src.file, st && st.id===src.id ? st : {id:src.id});
+}
 let opening=0;
-async function fromFile(file){
+async function fromFile(file, restore=null, sure=false){
   // Not before the core is up: there is nowhere to put the image yet.
   if(!core){ say_('coreMsg'); return; }
+  // A painting in progress is not replaced without a word.
+  if(!restore && !sure && hasImage && edits()>0){
+    askFirst('Open another picture?', 'The work open now, with its painting, will be replaced by the new picture.',
+             'Open', ()=>fromFile(file, null, true));
+    return;
+  }
   // Only the last file chosen is opened: a large one still decoding must not
   // replace a smaller one chosen after it.
   const mine=++opening;
@@ -6120,6 +6215,10 @@ async function fromFile(file){
   if(mine!==opening) return;
   srcBitmap=bitmap;
   size={w:bitmap.width,h:bitmap.height}; hasImage=true;
+  // The work's own number: the kept state belongs to this source only.
+  clearTimeout(waitKeep); waitKeep=null; pendingPaint=null;
+  workId = restore && restore.id ? restore.id : Date.now();
+  if(!restore) workPut('source', {id:workId, file});
   adviceGiven=false; lastMeasurements=null; splitByHand=null;
   // A new image starts from the beginning: otherwise, opening a file on stage 3,
   // one would look at paints computed for the previous work.
@@ -6134,6 +6233,7 @@ async function fromFile(file){
   if(stage!==1) toStage(1, true);
   // A hand held across the open lets go: its view was the old work's.
   pull=null; dots.clear(); base=null; pinchMid=null; linePull=null;
+  if(restore && restore.splitByHand!==undefined) splitByHand=restore.splitByHand;
   // The whole work fits the window at first — the window as it splits for
   // THIS work (side by side or stacked).
   arrangeWindows();
@@ -6147,7 +6247,21 @@ async function fromFile(file){
   refreshView();
   // A NEW WORK is a trigger for its pictures: they come into view.
   for(const c of document.querySelectorAll('#stages canvas')) appear(c);
+  if(restore && restore.at){ restoreWork(restore); return; }
   await findGrid();
+  laterCount(0);
+}
+/* A KEPT WORK stands again: its knobs, fixes and stage (as an undo step would
+   bring them), its view and histories; the stages are counted from them, and
+   the painting waits for its merge (installPaint). The advice comes only if
+   it had not come yet (the page closed before it): else the knobs are the
+   ones the hand left. */
+function restoreWork(ss){
+  touched=!!ss.touched; adviceGiven=ss.adviceGiven!==false;
+  pendingPaint = ss.paint ? {...ss.paint, at:ss.at} : null;
+  goBack(ss.at);
+  if(ss.view && ss.view.mm>0){ view={x:ss.view.x, y:ss.view.y, mm:zoomed(ss.view.mm)}; refreshView(); }
+  if(ss.undo){ UNDO.back.push(...ss.undo.back); UNDO.forward.push(...ss.undo.forward); trimHistory(UNDO); }
   laterCount(0);
 }
 /* ===================== grid ===================== */
@@ -6412,6 +6526,8 @@ function finishMerge(r, msec){
   // Merging rebuilt the paints — their numbers changed, and hand edits no
   // longer apply. The paint field is rebuilt from the new merge.
   resetRecolor();
+  const pp=pendingPaint; pendingPaint=null;
+  if(pp) installPaint(pp);
   if(stage===4 || leftView==='8') setupRecolor();
   showPalette(); lodgeAll(); stripEdges();
   refreshButtons(); redraw(); tell();
@@ -6768,6 +6884,7 @@ function tell(){
   // Without a work there is no result to tell: the status keeps its message
   // ("ready — open or drop an image", or why the file could not be read).
   if(!hasImage) return;
+  keepWork();                  // whatever changed the work ends here: it is kept
   const ch_=[];
   ch_.push(...currentStage().result());
   status.textContent=ch_.join('  ·  ');
@@ -6958,6 +7075,7 @@ function setPaintRGB(nn, rgb){
   const tile=$('#palette').strip.tile(nn);
   if(tile) paintTile(tile, `rgb(${rgb.join(',')})`);
   litFor=-1;
+  keepWork();
 }
 /* EDITING A PAINT — double-click it in the strip. The same window as for the
    interface colors, but its target is a paint: its color changes everywhere
@@ -7566,6 +7684,16 @@ const THEMES=[
                          canvas:'#393939', buttons:'#545454', text:'#e5e5e5',
                          lockButtons:false, lockText:false, auto:true, theme:'Blender'}},
 ];
+/* RETIRED THEMES — built-in ones taken out of the list, with the colors they
+   had. Nobody loses one they liked: a retired theme that was on, edited or a
+   favorite comes back as a theme of your own. A theme taken out of THEMES is
+   moved here, never simply deleted. */
+const RETIRED_THEMES={
+  Cocoa:   {hull:'#241c14', accent:'#e8a33d', markup:'#6ec7a8', canvas:'#1b150f', buttons:'#4a3b2c', text:'#f0e6d8'},
+  Amber:   {hull:'#1a1200', accent:'#ffb000', markup:'#00d0ff', canvas:'#0f0a00', buttons:'#3a2a00', text:'#ffcc66'},
+  Phosphor:{hull:'#001100', accent:'#33ff33', markup:'#ff5cf0', canvas:'#000a00', buttons:'#003a00', text:'#66ff66'},
+  Plum:    {hull:'#1e1526', accent:'#d17bf0', markup:'#7bf0a8', canvas:'#150f1c', buttons:'#3b2a4a', text:'#ece2f2'},
+};
 const DEFAULT_THEME='98';
 const DEFAULT_COLORS=THEMES.find(tt=>tt.name===DEFAULT_THEME).colors;
 const THEME_COLORS=['hull','accent','markup','canvas','buttons','text'];
@@ -7579,26 +7707,30 @@ const THEME_FLAGS=['lockButtons','lockText','auto'];
    Kept: every own theme, and a built-in one only while it differs from how
    it came (so a new version of the program can bring new factory colors). */
 const pickColors=cc=>{ const o={}; for(const kk of THEME_COLORS.concat(THEME_FLAGS)) o[kk]=cc[kk]; return o; };
-const sameColors=(a,b)=>THEME_COLORS.concat(THEME_FLAGS).every(kk=>a[kk]===b[kk]);
+// Two sets are the same theme. While the markup is picked from the work (auto
+// on both), its color is the work's, not the theme's: it does not count.
+const sameColors=(a,b)=>THEME_COLORS.concat(THEME_FLAGS)
+  .every(kk=>a[kk]===b[kk] || (kk==='markup' && a.auto && b.auto));
 let themeList=THEMES.map(tt=>({name:tt.name, colors:pickColors(tt.colors), back:pickColors(tt.colors)}));
 const allThemes=()=>themeList;
 const ownThemes=()=>themeList.filter(tt=>tt.own);
 const themeOf=name=>themeList.find(tt=>tt.name===name);
 const isOwnTheme=name=>{ const tt=themeOf(name); return !!(tt && tt.own); };
 const themeColors=tt=>({...tt.colors, theme:tt.name});
+// Own themes renamed on load (a built-in one took the name): old → new, for
+// the marks kept by name (favorites).
+const themeRenamed=new Map();
 function recallThemes(){
   const good=cc=>cc && /^#[0-9a-f]{6}$/i.test(cc.hull||'') && /^#[0-9a-f]{6}$/i.test(cc.accent||'');
   const fill=cc=>pickColors({...DEFAULT_COLORS, ...cc});
   let kept=null;
   try{ kept=JSON.parse(localStorage.getItem('repix.themeList')||'null'); }catch(_){}
   if(!Array.isArray(kept)){
-    // From the earlier records: own themes apart, a built-in's edits apart.
+    // From the earlier record (1.2): own themes only.
     kept=[];
     try{
       const own=JSON.parse(localStorage.getItem('repix.themes')||'[]');
       if(Array.isArray(own)) for(const tt of own) if(tt) kept.push({name:tt.name, colors:tt.colors, own:true});
-      const edits=JSON.parse(localStorage.getItem('repix.themeEdits')||'{}');
-      if(edits && typeof edits==='object') for(const name in edits) kept.push({name, colors:edits[name]});
     }catch(_){}
   }
   for(const tt of kept){
@@ -7609,7 +7741,10 @@ function recallThemes(){
     // An own theme under a name a built-in one has since taken: the same
     // colors — it has become that theme; others — it stays, with a number.
     if(was && !was.own && sameColors(fill(tt.colors), was.back)) continue;
-    if(was) for(let n=2; themeOf(name); n++) name=tt.name.slice(0, THEME_NAME_MAX-String(n).length-1)+' '+n;
+    if(was){
+      for(let n=2; themeOf(name); n++) name=tt.name.slice(0, THEME_NAME_MAX-String(n).length-1)+' '+n;
+      themeRenamed.set(tt.name, name);
+    }
     themeList.push({name, colors:fill(tt.colors), back:fill(good(tt.back) ? tt.back : tt.colors), own:true});
   }
 }
@@ -7624,8 +7759,18 @@ let favThemes=new Set(), favOnly=false;
 function recallFavs(){
   try{
     const tt=JSON.parse(localStorage.getItem('repix.favThemes')||'[]');
-    if(Array.isArray(tt)) favThemes=new Set(tt.filter(n=>typeof n==='string' && themeOf(n)));
+    if(Array.isArray(tt)){
+      const names=tt.filter(n=>typeof n==='string').map(n=>themeRenamed.get(n)||n);
+      let adopted=false;
+      for(const n of names) if(!themeOf(n) && RETIRED_THEMES[n]){
+        addTheme(n, {...DEFAULT_COLORS, ...RETIRED_THEMES[n], lockButtons:false, lockText:false, auto:true});
+        adopted=true;
+      }
+      if(adopted) saveThemes();
+      favThemes=new Set(names.filter(n=>themeOf(n)));
+    }
     favOnly=localStorage.getItem('repix.favOnly')==='1' && favThemes.size>0;
+    if(themeRenamed.size) saveFavs();          // the marks follow the new names at once
   }catch(_){}
 }
 function saveFavs(){
@@ -7633,6 +7778,18 @@ function saveFavs(){
     localStorage.setItem('repix.favThemes', JSON.stringify([...favThemes]));
     localStorage.setItem('repix.favOnly', favOnly ? '1' : '0');
   }catch(_){}
+}
+/* THE NEXT FAVORITE from a place in the list, in a direction: the arrows in
+   favorites mode, turning the mode on, a deletion — one way for all. */
+function nextFavorite(from, dd){
+  const all=allThemes(), n=all.length;
+  let i=all.findIndex(x=>x.name===from);
+  if(i<0) i = dd>0 ? -1 : n;
+  for(let k=1; k<=n; k++){
+    const tt=all[((i+dd*k)%n+n)%n];
+    if(favThemes.has(tt.name)) return tt;
+  }
+  return null;
 }
 /* A new own theme: its previous version is itself. */
 function addTheme(name, cc){
@@ -7669,13 +7826,10 @@ function saveThemesFile(list){
   const base = list.length===1 ? list[0].name.replace(/[\\/:*?"<>|]+/g,'_') : 'repix';
   giveFile(new TextEncoder().encode(JSON.stringify(out,null,1)), base+'.repix-themes.json', 'application/json');
 }
-/* Themes that were renamed keep their record; a theme that is gone leaves its
-   colors as they were, standing on the default theme's name. */
+/* Themes that were renamed are followed to their new name; a theme that is
+   gone becomes a theme of your own with its colors (see recallColors, and
+   RETIRED_THEMES for the favorites). */
 const RENAMED_THEMES={'Repix':'Moss'};
-const knownTheme=name=>{
-  const nn=RENAMED_THEMES[name]||name;
-  return allThemes().some(x=>x.name===nn) ? nn : DEFAULT_THEME;
-};
 function vvHSL(hex){
   const ch_=parseInt(hex.slice(1),16);
   return vvHSLch_(ch_>>16&255, ch_>>8&255, ch_&255);
@@ -7737,7 +7891,7 @@ function readable(fg, grounds, min){
   }
   return up ? '#ffffff' : '#000000';
 }
-const READS=4.5, READS_QUIET=3;
+const READS=4.5, READS_QUIET=3, READS_MARK=2.5;
 function deriveColors(hull,accent,markup,canvas,buttons,text){
   const cc=deriveBase(hull,accent,markup,canvas,buttons,text);
   // Each text on its own ground: labels on the buttons, text and quiet text
@@ -7749,6 +7903,9 @@ function deriveColors(hull,accent,markup,canvas,buttons,text){
   // The accent and the alarm as text: headings, knob values, a hint's title,
   // complaints on the panel; numbers and names typed into a field.
   cc['--accentText']      = readable(cc['--accent'], cc['--panel'], READS);
+  // A held icon (a closed lock, a lit heart): the accent itself as long as it
+  // stands out from the panel, moved only as far as it takes to.
+  cc['--accentMark']      = readable(cc['--accent'], cc['--panel'], READS_MARK);
   cc['--accentField']     = readable(cc['--accent'], cc['--field'], READS);
   cc['--accentLightField']= readable(cc['--accentLight'], cc['--field'], READS);
   cc['--alarmText']       = readable(cc['--alarm'], cc['--panel'], READS);
@@ -8115,9 +8272,23 @@ function recallColors(){
              text: good(tt.text)?tt.text:DEFAULT_COLORS.text,
              lockButtons: tt.lockButtons!==undefined ? !!tt.lockButtons : DEFAULT_COLORS.lockButtons,
              lockText:  tt.lockText !==undefined ? !!tt.lockText  : DEFAULT_COLORS.lockText,
-             theme: knownTheme(tt.theme),
+             theme: tt.theme,
              auto: tt.auto!==undefined ? !!tt.auto : DEFAULT_COLORS.auto};
   }catch(_){}
+  /* THE RECORD IS THE TRUTH: what was saved says which theme is on; its
+     colors are the theme's record (a new version's factory colors, applied
+     edits). A theme that is gone (renamed ones are followed) stays, with the
+     colors it had, as a theme of your own. */
+  const name=RENAMED_THEMES[colors.theme]||colors.theme;
+  let tt=typeof name==='string' && name ? themeOf(name) : null;
+  if(!tt && localStorage.getItem('repix.colors')){
+    // A record with no theme at all (older than themes) is kept the same way.
+    const base=typeof name==='string' && name.trim() ? name.trim().slice(0, THEME_NAME_MAX) : 'Own 1';
+    let own=base;
+    for(let n=2; themeOf(own); n++) own=base.slice(0, THEME_NAME_MAX-String(n).length-1)+' '+n;
+    tt=addTheme(own, colors); saveThemes();
+  }
+  colors = tt ? themeColors(tt) : {...DEFAULT_COLORS, theme:DEFAULT_THEME};
 }
 /* ===================== GRID PIXEL SIZE =====================
    The grid cannot be fixed at two CSS pixels: on 4K at 100% that is a strip
@@ -8237,7 +8408,7 @@ function setupSettings(){
   fitGrid();
   recallFlipping();
   buildStepList();
-  recallThemes(); recallFavs(); recallColors(); applyColors();
+  recallThemes(); recallColors(); recallFavs(); applyColors();
   const win=$('#settings'), plate=$('#name'), guide=$('#guide');
   const opened=()=>!win.hasAttribute('hidden');
   /* THE PAGES of the menu window: a title for the top row, whether the page is
@@ -8377,12 +8548,11 @@ function setupSettings(){
   const themeRow=$('#themes');
   if(themeRow && !themeRow.children.length){
     const stepTheme=dd=>{
-      const all=favOnly ? allThemes().filter(x=>favThemes.has(x.name)) : allThemes();
-      if(!all.length) return;
-      // Out of the list (a theme that is not a favorite): the first one
-      // forward, the last one back.
-      const i=all.findIndex(x=>x.name===colors.theme);
-      const tt = i<0 ? all[dd>0 ? 0 : all.length-1] : all[(i+dd+all.length)%all.length];
+      let tt;
+      if(favOnly) tt=nextFavorite(colors.theme, dd);
+      else{ const all=allThemes(), i=all.findIndex(x=>x.name===colors.theme);
+            tt=all[((i<0?0:i)+dd+all.length)%all.length]; }
+      if(!tt) return;
       colors=themeColors(tt); applyColors(); saveColors();
     };
     const arrow=(text,dd)=>buildNode({tag:'button', cls:'themeArrow', text, hug:true,
@@ -8479,7 +8649,9 @@ function setupSettings(){
     const tt=themeOf(colors.theme);
     if(tt && !sameColors(tt.colors, colors)){
       if(tt.own) tt.back=tt.colors;
-      tt.colors=pickColors(colors); saveThemes();
+      const cc=pickColors(colors);
+      if(cc.auto) cc.markup=tt.colors.markup;   // the work's pick stays out of the theme
+      tt.colors=cc; saveThemes();
     }
     saveColors();
   }
@@ -8503,11 +8675,8 @@ function setupSettings(){
     // Turned on over a theme that is not a favorite: the next favorite after
     // it in the list is put on.
     if(favOnly && !favThemes.has(colors.theme)){
-      const all=allThemes(), i=all.findIndex(x=>x.name===colors.theme);
-      for(let k=1; k<=all.length; k++){
-        const tt=all[((i<0?-1:i)+k)%all.length];
-        if(favThemes.has(tt.name)){ colors=themeColors(tt); applyColors(); saveColors(); break; }
-      }
+      const tt=nextFavorite(colors.theme, +1);
+      if(tt){ colors=themeColors(tt); applyColors(); saveColors(); }
     }
   };
   function refreshOwnRow(){ const rr=$('#ownThemeRow'); if(rr) rr.hidden = page()!=='theme' || !isOwnTheme(colors.theme); }
@@ -8561,11 +8730,14 @@ function setupSettings(){
     if(!isOwnTheme(colors.theme)) return;
     const name=colors.theme;
     ask('Delete theme?', `"${name}" will be removed from the list for good. A theme saved to disk can be loaded again.`, 'Delete', ()=>{
+      // What comes on instead: the previous one — a favorite, when the
+      // arrows flip through favorites.
       const all=allThemes(), i=all.findIndex(x=>x.name===name);
-      themeList=themeList.filter(x=>x.name!==name);
       if(favThemes.delete(name)){ if(!favThemes.size) favOnly=false; saveFavs(); }
+      const next=(favOnly && nextFavorite(name, -1)) || all[i-1];
+      themeList=themeList.filter(x=>x.name!==name);
       saveThemes(); editFrom=null;
-      colors=themeColors(all[i-1]); applyColors(); saveColors(); home(); }); };
+      colors=themeColors(next); applyColors(); saveColors(); home(); }); };
   for(const id_ of ['themeFav','themeFavs','themeAdd','themeSave','themeFork','themeLoad','themeRename','themeDelete','themeNameField','saveToDisk','themeApply','themeCancel'])
     attachHint($('#'+id_), HINTS[id_]);
   // The colors: swatches open the picker, locks flip; both explain themselves.
@@ -8702,7 +8874,7 @@ function takeLaunched(){
     if(lp.files && lp.files.length) fromFile(await lp.files[0].getFile());
   });
 }
-bootCore().then(()=>{ refreshButtons(); takeLaunched(); }).catch(e=>{ say_('coreFailed',e); });
+bootCore().then(()=>{ refreshButtons(); takeLaunched(); recallWork(); }).catch(e=>{ say_('coreFailed',e); });
 </script>
 </body>
 </html>

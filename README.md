@@ -1,15 +1,15 @@
 # Repix
 
-Repix takes an upscaled, recompressed picture — usually a JPEG pulled from the
-internet — finds the grid of the original pixel art and gives the art back at
-its native resolution: one grid cell = one pixel.
+You found a piece of pixel art you love, and all the internet has left of it
+is a blurry, upscaled JPEG. Repix brings it back: it finds the grid of the original
+art and hands you the art at its real size — one cell, one pixel, clean enough
+to edit.
 
-**The pixels are already in the file. JPEG only fogged them. Repix develops them.**
+**The pixels are still in the file. JPEG only fogged them. Repix develops them.**
 
-And it runs on an engine of its own: nothing in it jumps, nothing is
-recomputed for no reason. Everything that moves goes to its goal by one law of
-motion, and the layout changes only at thresholds worked out from the data —
-see [The engine](#the-engine).
+It is also made with care. Nothing in it jumps or flickers: every button,
+panel and picture moves to its place by one law of motion, like a thing with
+a little weight to it — see [The engine](#the-engine).
 
 **From the concept to this release: nine days.**
 
@@ -17,34 +17,40 @@ see [The engine](#the-engine).
 
 ## Running it
 
-**On the web:** https://spuoker.github.io/repix/ — the browser offers to
-install it as an app (on a phone too); it then works without the network.
+**In the browser:** open https://spuoker.github.io/repix/. The browser will
+offer to install it as an app, on a phone too, and then it works offline.
 
-**From disk:** download `repix.html` and open it with a double click. That's all.
+**From disk:** download `repix.html` and double-click it. That's it.
 
-No installation, no server, no internet. One self-contained page of about
-630 KB with the computing core (WebAssembly, ~118 KB) and the font inside. It
-works on a phone too, with the same results: an Android browser opens the file
-from the device; an iPhone does not run a page saved on it, so there open it by
-its web link.
+Nothing to install, no server, no account, no internet. It is one page of
+about 630 KB with everything inside: the computing core (WebAssembly,
+~118 KB) and the font. On Android, open the file right from the phone; an
+iPhone won't run a saved page, so use the web link there.
 
-Drop an image onto the window or press **Open**. The grid is found by itself;
-if it misses, the knobs fix it and the result updates at once. A knob's field
-counts: type `12/3` or `(2+3)*4` and the value follows as you type. **F11**
-gives the page its own full screen, with no browser bar dropping over the
-buttons. **Guide** in the settings menu (the gear on the **Repix** plate)
-lists every mouse, key and finger action.
+## Using it
 
-The same menu holds **52 themes**, each with an idea behind it and kept by
-families: light daylight ones, the old machines pixel art was born on, a bar
-(a drink each), sodas, warm wood and tea, water and night skies, dark nights
-with a story. Mark the ones you like with a heart, and the arrows flip through
-your favorites only. Your own themes can be made, edited, saved to a file and
-loaded elsewhere.
+Drop a picture onto the window, or press **Open**. Repix finds the grid by
+itself. If it gets it wrong, turn the knobs — the result follows at once. A
+knob's field takes maths too: type `12/3` or `(2+3)*4`. **F11** gives a clean
+full screen, with no browser bar sliding over the buttons. Everything the
+mouse, keys and fingers can do is listed in **Guide**, in the settings menu
+(the gear on the **Repix** plate).
+
+You don't have to think about saving your progress. Close the tab, reload,
+let the phone unload the page — Repix opens right where you left it, painting
+and undo history included. **Save** gives you the current result as a PNG.
+
+And make it yours: **52 themes**, each with an idea behind it, kept by
+families — daylight ones, the old machines pixel art was born on, a bar with a
+drink each, sodas, warm wood and tea, water and night skies, dark nights with
+a story. Heart the ones you like, and the arrows flip through just those. You
+can make your own themes too, save them to a file and bring them to another
+browser.
 
 ## The four stages
 
-The grid first, then three passes with a growing field of view, then the hand:
+The grid first, then three passes that look a little wider each time, then
+your hand:
 
 1. **Prepare** — each cell on its own: the grid is found, and every cell gets
    one color from its pixels. Stray pixels are weighed down, neighbouring
@@ -54,8 +60,8 @@ The grid first, then three passes with a growing field of view, then the hand:
 3. **Merge** — clusters of the same color anywhere in the work become one
    paint. Weight decides: a paint spread over five hundred cells is the
    author's, five stray cells are a leftover.
-4. **Paint** — no more algorithms. Brush, fill and pipette finish what did not
-   come together; paints can be copied from any picture, edited, added,
+4. **Paint** — no more algorithms, your turn. Brush, fill and pipette finish
+   what did not come together; paints can be copied from any picture, edited, added,
    deleted, and the unused ones cleaned out.
 
 The left window shows any step already passed (keys `1`…`8`: source, grid,
@@ -81,8 +87,8 @@ hand changes *what* goes into a cell, not what the cell looks like.
 
 ## The engine
 
-Repix is not built on a UI library. It runs on a **framework-engine** of its
-own, written for it and living inside the same page:
+Repix does not sit on a UI library. It has a **framework-engine** of its own,
+made for it and living inside the same page. The ideas it stands on:
 
 - **Everything that moves goes to a goal.** A button finding its new place, a
   panel rolling into one row, a scroll, a fading hint, a theme color, the

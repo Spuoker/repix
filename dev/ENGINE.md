@@ -87,6 +87,10 @@ in `STANDARD`.
 - **Measure, don't guess.** Before and after a change of the layout, compare
   where every object stands at several window sizes; they must match unless
   the change means otherwise.
+- **A built-in theme is retired, never deleted.** Taking one out of `THEMES`,
+  move its colors to `RETIRED_THEMES`: whoever had it on, edited or among the
+  favorites keeps it as a theme of their own. Settings live by the page's
+  address, not its version, so they outlive every update.
 - **Rows by the layout, not by the drawing.** A thing on its way is drawn off
   its place; tell rows apart by where the layout puts it (`laidTop`).
 - **Testing in a hidden browser tab lies.** A tab that is not painted runs
