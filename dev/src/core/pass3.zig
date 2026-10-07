@@ -13,14 +13,25 @@
 // order of a scan.
 //
 // The threshold comes from weight, as in pass 2 from group size:
-//     threshold = (sqrt(min paint / weight) - 1) x median difference between
-//                 cluster colors of this work, per axis
+//     threshold = max(1, sqrt(min paint / weight) - 1) x median difference
+//                 between cluster colors of this work, per axis
 // Weight is counted over the WHOLE work: clusters of exactly the same color are
 // summed first. A paint of five cells in the whole work is almost surely a
 // leftover; a paint of five hundred is the author's, even if scattered.
 
 const memory = @import("memory.zig");
 const std = @import("std");
+
+// A CLUSTER'S COLOR IS FOUR BYTES, straight RGBA (see pass 2). How much of a
+// paint is there is judged beside lightness and tone, by the lightness
+// threshold: a paint and nothing never merge. On a picture with no
+// transparency alpha never differs, and nothing changes.
+const CH = 4;
+
+/// Alpha difference of two colors.
+inline fn dAlpha(a: f64, b: f64) f64 {
+    return if (a > b) a - b else b - a;
+}
 
 /// Splits a color difference into lightness (along the grey axis) and tone
 /// (across it).
@@ -67,11 +78,11 @@ var SLOTS: u32 = 0;
 /// Merging clusters into paints.
 ///   label    — cluster of each cell (pass 2 output), `total` long;
 ///   clusters — how many clusters there are;
-///   color    — color of each cluster, three bytes;
+///   color    — color of each cluster, four bytes (RGBA);
 ///   mS, mT   — median difference between cluster colors: the unit;
 ///   min_paint — weight from which a paint stands on its own;
 ///   max_paints — how many paints to keep at most; 0 — no limit;
-///   out      — color of each CELL after merging (three bytes);
+///   out      — color of each CELL after merging (four bytes);
 ///   target   — paint number of each cluster (u32).
 /// Returns the number of paints, in one call.
 export fn pass3(
@@ -154,7 +165,7 @@ export fn pass3Begin(
     const size_a = memory.alloc(gg * 4);
     const order_a = memory.alloc(gg * 4);
     // palette: color sum and weight of each paint (the mean is kept on the fly)
-    const psum_a = memory.alloc(gg * 3 * 8);
+    const psum_a = memory.alloc(gg * CH * 8);
     const pweight_a = memory.alloc(gg * 8);
     if (size_a == 0 or order_a == 0 or psum_a == 0 or pweight_a == 0) return 0;
     const size = @as([*]u32, @ptrFromInt(size_a));
@@ -195,7 +206,8 @@ export fn pass3Begin(
     const paint_weight = @as([*]u32, @ptrFromInt(pw_a));
     i = 0;
     while (i < gg) : (i += 1) {
-        key[i] = (@as(u32, color[i * 3]) << 16) | (@as(u32, color[i * 3 + 1]) << 8) | @as(u32, color[i * 3 + 2]);
+        key[i] = (@as(u32, color[i * CH + 3]) << 24) | (@as(u32, color[i * CH]) << 16) |
+            (@as(u32, color[i * CH + 1]) << 8) | @as(u32, color[i * CH + 2]);
         bycolor[i] = @intCast(i);
         paint_weight[i] = size[i];
     }
@@ -311,9 +323,10 @@ export fn pass3Clusters(count: u32) u32 {
             target[g] = 0;
             continue;
         }
-        const r = @as(f64, @floatFromInt(color[g * 3]));
-        const gc = @as(f64, @floatFromInt(color[g * 3 + 1]));
-        const b = @as(f64, @floatFromInt(color[g * 3 + 2]));
+        const r = @as(f64, @floatFromInt(color[g * CH]));
+        const gc = @as(f64, @floatFromInt(color[g * CH + 1]));
+        const b = @as(f64, @floatFromInt(color[g * CH + 2]));
+        const al = @as(f64, @floatFromInt(color[g * CH + 3]));
         // MARGIN BY WEIGHT, as in pass 2, but never below one unit: even the
         // largest paint forgives its neighbour one median difference.
         var margin: f64 = 1;
@@ -338,7 +351,8 @@ export fn pass3Clusters(count: u32) u32 {
             const w = pweight[k];
             var dS: f64 = 0;
             var dT: f64 = 0;
-            split(r, gc, b, psum[k * 3] / w, psum[k * 3 + 1] / w, psum[k * 3 + 2] / w, &dS, &dT);
+            split(r, gc, b, psum[k * CH] / w, psum[k * CH + 1] / w, psum[k * CH + 2] / w, &dS, &dT);
+            const dA = dAlpha(al, psum[k * CH + 3] / w);
             // a neighbouring paint is judged stricter: it is a border, not a copy
             var kf: f64 = 1;
             {
@@ -353,8 +367,8 @@ export fn pass3Clusters(count: u32) u32 {
             }
             // "not more than", not "less than": two identical colors differ by
             // zero, and zero fits any threshold.
-            const fits = dS <= pY * kf and dT <= pT * kf;
-            const d = dS * dS + dT * dT;
+            const fits = dS <= pY * kf and dT <= pT * kf and dA <= pY * kf;
+            const d = dS * dS + dT * dT + dA * dA;
             if (fits and d < best_d) {
                 best_d = d;
                 best = k;
@@ -373,8 +387,9 @@ export fn pass3Clusters(count: u32) u32 {
                 const w = pweight[k];
                 var dS: f64 = 0;
                 var dT: f64 = 0;
-                split(r, gc, b, psum[k * 3] / w, psum[k * 3 + 1] / w, psum[k * 3 + 2] / w, &dS, &dT);
-                const d = @sqrt(dS * dS + dT * dT);
+                split(r, gc, b, psum[k * CH] / w, psum[k * CH + 1] / w, psum[k * CH + 2] / w, &dS, &dT);
+                const dA = dAlpha(al, psum[k * CH + 3] / w);
+                const d = @sqrt(dS * dS + dT * dT + dA * dA);
                 if (d < best_d) {
                     best_d = d;
                     best = k;
@@ -393,9 +408,10 @@ export fn pass3Clusters(count: u32) u32 {
                     if (pweight[k2] <= 0) continue;
                     var dS: f64 = 0;
                     var dT: f64 = 0;
-                    split(psum[k1 * 3] / pweight[k1], psum[k1 * 3 + 1] / pweight[k1], psum[k1 * 3 + 2] / pweight[k1],
-                        psum[k2 * 3] / pweight[k2], psum[k2 * 3 + 1] / pweight[k2], psum[k2 * 3 + 2] / pweight[k2], &dS, &dT);
-                    const d = @sqrt(dS * dS + dT * dT);
+                    split(psum[k1 * CH] / pweight[k1], psum[k1 * CH + 1] / pweight[k1], psum[k1 * CH + 2] / pweight[k1],
+                        psum[k2 * CH] / pweight[k2], psum[k2 * CH + 1] / pweight[k2], psum[k2 * CH + 2] / pweight[k2], &dS, &dT);
+                    const dA = dAlpha(psum[k1 * CH + 3] / pweight[k1], psum[k2 * CH + 3] / pweight[k2]);
+                    const d = @sqrt(dS * dS + dT * dT + dA * dA);
                     const cost = @min(pweight[k1], pweight[k2]) * d;
                     if (cost < cost_pair) {
                         cost_pair = cost;
@@ -408,9 +424,8 @@ export fn pass3Clusters(count: u32) u32 {
                 // merge the pair: the lighter goes into the heavier, a place frees up
                 const heavy = if (pweight[pa_k] >= pweight[pb_k]) pa_k else pb_k;
                 const light = if (heavy == pa_k) pb_k else pa_k;
-                psum[heavy * 3] += psum[light * 3];
-                psum[heavy * 3 + 1] += psum[light * 3 + 1];
-                psum[heavy * 3 + 2] += psum[light * 3 + 2];
+                var ch: usize = 0;
+                while (ch < CH) : (ch += 1) psum[heavy * CH + ch] += psum[light * CH + ch];
                 pweight[heavy] += pweight[light];
                 pweight[light] = 0;
                 moved[light] = @intCast(heavy);
@@ -420,18 +435,20 @@ export fn pass3Clusters(count: u32) u32 {
         }
         const w_g = @as(f64, @floatFromInt(size[g]));
         if (best == n_paints) {
-            psum[n_paints * 3] = r * w_g;
-            psum[n_paints * 3 + 1] = gc * w_g;
-            psum[n_paints * 3 + 2] = b * w_g;
+            psum[n_paints * CH] = r * w_g;
+            psum[n_paints * CH + 1] = gc * w_g;
+            psum[n_paints * CH + 2] = b * w_g;
+            psum[n_paints * CH + 3] = al * w_g;
             pweight[n_paints] = w_g;
             target[g] = @intCast(n_paints);
             assigned[g] = 1;
             n_paints += 1;
             alive += 1;
         } else {
-            psum[best * 3] += r * w_g;
-            psum[best * 3 + 1] += gc * w_g;
-            psum[best * 3 + 2] += b * w_g;
+            psum[best * CH] += r * w_g;
+            psum[best * CH + 1] += gc * w_g;
+            psum[best * CH + 2] += b * w_g;
+            psum[best * CH + 3] += al * w_g;
             pweight[best] += w_g;
             target[g] = @intCast(best);
             assigned[g] = 1;
@@ -457,10 +474,8 @@ export fn pass3Preview(rgba: [*]u8) void {
         while (T.moved[k] != @as(u32, @intCast(k))) k = @as(usize, T.moved[k]);
         const w = T.pweight[k];
         if (w <= 0) continue;
-        rgba[c * 4] = roundByte(T.psum[k * 3] / w);
-        rgba[c * 4 + 1] = roundByte(T.psum[k * 3 + 1] / w);
-        rgba[c * 4 + 2] = roundByte(T.psum[k * 3 + 2] / w);
-        rgba[c * 4 + 3] = 255;
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) rgba[c * 4 + ch] = roundByte(T.psum[k * CH + ch] / w);
     }
 }
 
@@ -482,18 +497,16 @@ export fn pass3End() u32 {
     while (c < total) : (c += 1) {
         const g = label[c];
         if (g < 0 or @as(usize, @intCast(g)) >= gg) {
-            out[c * 3] = 0;
-            out[c * 3 + 1] = 0;
-            out[c * 3 + 2] = 0;
+            var ch: usize = 0;
+            while (ch < CH) : (ch += 1) out[c * CH + ch] = 0;
             continue;
         }
         var k = @as(usize, target[@as(usize, @intCast(g))]);
         while (moved[k] != @as(u32, @intCast(k))) k = @as(usize, moved[k]);
         target[@as(usize, @intCast(g))] = @intCast(k);
         const w = pweight[k];
-        out[c * 3] = roundByte(psum[k * 3] / w);
-        out[c * 3 + 1] = roundByte(psum[k * 3 + 1] / w);
-        out[c * 3 + 2] = roundByte(psum[k * 3 + 2] / w);
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) out[c * CH + ch] = roundByte(psum[k * CH + ch] / w);
     }
 
     PAINTS = @intCast(alive);
@@ -502,8 +515,9 @@ export fn pass3End() u32 {
 }
 
 /// The palette for the page: color and weight of each paint in a row —
-/// r, g, b, cells.
-var PALETTE: [4096 * 4]f64 = undefined;
+/// r, g, b, a, cells.
+const PW = 5;
+var PALETTE: [4096 * PW]f64 = undefined;
 export fn paletteAddress() usize {
     return @intFromPtr(&PALETTE);
 }
@@ -514,12 +528,7 @@ export fn gatherPalette(label: [*]const i32, total: usize, target: [*]const u32,
     // every number in use: a paint may live above an absorbed one
     const n = @min(@as(usize, SLOTS), 4096);
     var i: usize = 0;
-    while (i < n) : (i += 1) {
-        PALETTE[i * 4] = 0;
-        PALETTE[i * 4 + 1] = 0;
-        PALETTE[i * 4 + 2] = 0;
-        PALETTE[i * 4 + 3] = 0;
-    }
+    while (i < n * PW) : (i += 1) PALETTE[i] = 0;
     var c: usize = 0;
     while (c < total) : (c += 1) {
         const g = label[c];
@@ -527,18 +536,16 @@ export fn gatherPalette(label: [*]const i32, total: usize, target: [*]const u32,
         const k = @as(usize, target[@as(usize, @intCast(g))]);
         if (k >= n) continue;
         const gu = @as(usize, @intCast(g));
-        PALETTE[k * 4] += @floatFromInt(color[gu * 3]);
-        PALETTE[k * 4 + 1] += @floatFromInt(color[gu * 3 + 1]);
-        PALETTE[k * 4 + 2] += @floatFromInt(color[gu * 3 + 2]);
-        PALETTE[k * 4 + 3] += 1;
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) PALETTE[k * PW + ch] += @floatFromInt(color[gu * CH + ch]);
+        PALETTE[k * PW + 4] += 1;
     }
     i = 0;
     while (i < n) : (i += 1) {
-        const w = PALETTE[i * 4 + 3];
+        const w = PALETTE[i * PW + 4];
         if (w > 0) {
-            PALETTE[i * 4] /= w;
-            PALETTE[i * 4 + 1] /= w;
-            PALETTE[i * 4 + 2] /= w;
+            var ch: usize = 0;
+            while (ch < CH) : (ch += 1) PALETTE[i * PW + ch] /= w;
         }
     }
     return @intCast(n);

@@ -82,7 +82,14 @@ fn refine(p: [*]const f64, n: usize, step: *f64, phase: *f64) void {
     }
 }
 
-/// Finds the grid of the art in an RGB image.
+// A PIXEL IS FOUR NUMBERS: its color, premultiplied by how much of it is
+// there, and that amount (alpha). A pixel that is not there at all is
+// (0, 0, 0, 0) whatever color a file left under it; the edge between a pixel
+// and nothing is as strong as any edge of color. A picture with no
+// transparency has alpha 255 everywhere and is measured as it always was.
+const CH = 4;
+
+/// Finds the grid of the art in an RGBA image (premultiplied, see CH).
 /// out[0] — cell size, out[1..2] — origin x and y, out[3..6] — the art's frame
 /// (x0, y0, x1, y1), out[7] — agreement of the answer.
 /// Returns 1 on success, 0 when no grid is found.
@@ -100,16 +107,15 @@ export fn findGrid(
 
     // ---- frame: the canvas edges know nothing about the grid, take the part
     // occupied by the art. The background is the median of each channel.
-    var hist: [3][256]u32 = .{.{0} ** 256} ** 3;
+    var hist: [CH][256]u32 = .{.{0} ** 256} ** CH;
     var i: usize = 0;
     while (i < Wu * Hu) : (i += 1) {
-        hist[0][img[i * 3]] += 1;
-        hist[1][img[i * 3 + 1]] += 1;
-        hist[2][img[i * 3 + 2]] += 1;
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) hist[ch][img[i * CH + ch]] += 1;
     }
-    var bg: [3]u32 = undefined;
+    var bg: [CH]u32 = undefined;
     var c: usize = 0;
-    while (c < 3) : (c += 1) {
+    while (c < CH) : (c += 1) {
         var total: u32 = 0;
         var v: usize = 0;
         while (v < 256) : (v += 1) {
@@ -135,10 +141,10 @@ export fn findGrid(
     while (y < Hu) : (y += 1) {
         var x: usize = 0;
         while (x < Wu) : (x += 1) {
-            const b = (y * Wu + x) * 3;
+            const b = (y * Wu + x) * CH;
             var d: u32 = 0;
             var k: usize = 0;
-            while (k < 3) : (k += 1) {
+            while (k < CH) : (k += 1) {
                 const a = @as(i32, img[b + k]) - @as(i32, @intCast(bg[k]));
                 d += @intCast(if (a < 0) -a else a);
             }
@@ -187,11 +193,11 @@ export fn findGrid(
     while (y < y1) : (y += 1) {
         var x = x0;
         while (x + 1 < x1) : (x += 1) {
-            const a = (y * Wu + x) * 3;
-            const b = (y * Wu + x + 1) * 3;
+            const a = (y * Wu + x) * CH;
+            const b = (y * Wu + x + 1) * CH;
             var d: f64 = 0;
             var k: usize = 0;
-            while (k < 3) : (k += 1) {
+            while (k < CH) : (k += 1) {
                 const r = @as(f64, @floatFromInt(img[a + k])) - @as(f64, @floatFromInt(img[b + k]));
                 d += if (r < 0) -r else r;
             }
@@ -202,11 +208,11 @@ export fn findGrid(
     while (y + 1 < y1) : (y += 1) {
         var x = x0;
         while (x < x1) : (x += 1) {
-            const a = (y * Wu + x) * 3;
-            const b = ((y + 1) * Wu + x) * 3;
+            const a = (y * Wu + x) * CH;
+            const b = ((y + 1) * Wu + x) * CH;
             var d: f64 = 0;
             var k: usize = 0;
-            while (k < 3) : (k += 1) {
+            while (k < CH) : (k += 1) {
                 const r = @as(f64, @floatFromInt(img[a + k])) - @as(f64, @floatFromInt(img[b + k]));
                 d += if (r < 0) -r else r;
             }

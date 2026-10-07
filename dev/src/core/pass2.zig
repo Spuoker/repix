@@ -19,6 +19,12 @@ const std = @import("std");
 
 // ───────────────────────── color measure ─────────────────────────
 
+// A CELL IS FOUR BYTES: straight RGBA from pass 1. How much of a cell is there
+// (alpha) is a third gate beside lightness and tone: cells that differ in it
+// are different paints, however alike their colors — a pixel and nothing are
+// never one group. On a picture with no transparency alpha never differs.
+const CH = 4;
+
 // A COLOR DIFFERENCE IS SPLIT IN TWO. One RGB number cannot tell a change in
 // lightness from a change in tone, and in pixel art these are different events:
 //   lightness — the same paint darker or lighter (a ramp the author drew);
@@ -38,20 +44,22 @@ fn split(ar: f64, ag: f64, ab: f64, br: f64, bg: f64, bb: f64, dS: *f64, dT: *f6
 
 /// Does a color belong with a group: within the lightness threshold AND the
 /// tone threshold. Two separate gates, so the thresholds do not pull at each other.
-fn same(ar: f64, ag: f64, ab: f64, br: f64, bg: f64, bb: f64, pY: f64, pT: f64) bool {
+fn same(ar: f64, ag: f64, ab: f64, aa: f64, br: f64, bg: f64, bb: f64, ba: f64, pY: f64, pT: f64) bool {
     var dS: f64 = 0;
     var dT: f64 = 0;
     split(ar, ag, ab, br, bg, bb, &dS, &dT);
-    return dS < pY and dT < pT;
+    const dA = if (aa > ba) aa - ba else ba - aa;
+    return dS < pY and dT < pT and dA < pY;
 }
 
 /// Round color distance between two cells.
 fn dist(art: [*]const u8, a: usize, b: usize) f64 {
     var dS: f64 = 0;
     var dT: f64 = 0;
-    split(@floatFromInt(art[a * 3]), @floatFromInt(art[a * 3 + 1]), @floatFromInt(art[a * 3 + 2]),
-        @floatFromInt(art[b * 3]), @floatFromInt(art[b * 3 + 1]), @floatFromInt(art[b * 3 + 2]), &dS, &dT);
-    return @sqrt(dS * dS + dT * dT);
+    split(@floatFromInt(art[a * CH]), @floatFromInt(art[a * CH + 1]), @floatFromInt(art[a * CH + 2]),
+        @floatFromInt(art[b * CH]), @floatFromInt(art[b * CH + 1]), @floatFromInt(art[b * CH + 2]), &dS, &dT);
+    const dA = @as(f64, @floatFromInt(art[a * CH + 3])) - @as(f64, @floatFromInt(art[b * CH + 3]));
+    return @sqrt(dS * dS + dT * dT + dA * dA);
 }
 
 fn roundByte(v: f64) u8 {
@@ -166,9 +174,8 @@ fn merge(P: *const Groups, ra: usize, rb: usize) void {
     const big = if (P.count[ra] >= P.count[rb]) ra else rb;
     const small = if (big == ra) rb else ra;
     P.parent[small] = @intCast(big);
-    P.sum[big * 3] += P.sum[small * 3];
-    P.sum[big * 3 + 1] += P.sum[small * 3 + 1];
-    P.sum[big * 3 + 2] += P.sum[small * 3 + 2];
+    var ch: usize = 0;
+    while (ch < CH) : (ch += 1) P.sum[big * CH + ch] += P.sum[small * CH + ch];
     P.count[big] += P.count[small];
     P.ymin[big] = @min(P.ymin[big], P.ymin[small]);
     P.ymax[big] = @max(P.ymax[big], P.ymax[small]);
@@ -205,8 +212,8 @@ fn decide(P: *const Groups, a0: usize, b0: usize) void {
     const thr_y = @max(UNIT_Y * pb, CELL_NOISE);
     const thr_t = @max(UNIT_T * pb, CELL_NOISE);
     if (rangeOk(P, ra, rb, thr_y) and
-        same(P.sum[ra * 3] / na, P.sum[ra * 3 + 1] / na, P.sum[ra * 3 + 2] / na,
-            P.sum[rb * 3] / nb, P.sum[rb * 3 + 1] / nb, P.sum[rb * 3 + 2] / nb, thr_y, thr_t)) merge(P, ra, rb);
+        same(P.sum[ra * CH] / na, P.sum[ra * CH + 1] / na, P.sum[ra * CH + 2] / na, P.sum[ra * CH + 3] / na,
+            P.sum[rb * CH] / nb, P.sum[rb * CH + 1] / nb, P.sum[rb * CH + 2] / nb, P.sum[rb * CH + 3] / nb, thr_y, thr_t)) merge(P, ra, rb);
 }
 
 // ───────────────────────── pass 2 ─────────────────────────
@@ -234,7 +241,7 @@ const BUCKETS = 2048;
 const BUCKET_STEP = 4.0 / @as(f64, BUCKETS);
 var S: Pass = .{};
 
-/// art — pass 1 output, nx by ny cells, three bytes each.
+/// art — pass 1 output, nx by ny cells, four bytes each (straight RGBA).
 /// out — color of each cell after merging; label — cluster of each cell.
 /// Returns the number of clusters, in one call.
 export fn pass2(
@@ -264,7 +271,7 @@ export fn pass2Begin(
     S.total = 0;
 
     const parent_addr = memory.alloc(total * 4);
-    const sum_addr = memory.alloc(total * 3 * 8);
+    const sum_addr = memory.alloc(total * CH * 8);
     const count_addr = memory.alloc(total * 8);
     const ymin_addr = memory.alloc(total * 8);
     const ymax_addr = memory.alloc(total * 8);
@@ -279,11 +286,10 @@ export fn pass2Begin(
     var c: usize = 0;
     while (c < total) : (c += 1) {
         parent[c] = @intCast(c);
-        sum[c * 3] = @floatFromInt(art[c * 3]);
-        sum[c * 3 + 1] = @floatFromInt(art[c * 3 + 1]);
-        sum[c * 3 + 2] = @floatFromInt(art[c * 3 + 2]);
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) sum[c * CH + ch] = @floatFromInt(art[c * CH + ch]);
         count[c] = 1;
-        ymin[c] = lightness(@floatFromInt(art[c * 3]), @floatFromInt(art[c * 3 + 1]), @floatFromInt(art[c * 3 + 2]));
+        ymin[c] = lightness(@floatFromInt(art[c * CH]), @floatFromInt(art[c * CH + 1]), @floatFromInt(art[c * CH + 2]));
         ymax[c] = ymin[c];
     }
 
@@ -424,10 +430,10 @@ export fn pass2Preview(rgba: [*]u8) void {
         const r = root(S.G.parent, c);
         const n = S.G.count[r];
         if (n < 2) continue;
-        rgba[c * 4] = roundByte(S.G.sum[r * 3] / n);
-        rgba[c * 4 + 1] = roundByte(S.G.sum[r * 3 + 1] / n);
-        rgba[c * 4 + 2] = roundByte(S.G.sum[r * 3 + 2] / n);
-        rgba[c * 4 + 3] = 255;
+        rgba[c * 4] = roundByte(S.G.sum[r * CH] / n);
+        rgba[c * 4 + 1] = roundByte(S.G.sum[r * CH + 1] / n);
+        rgba[c * 4 + 2] = roundByte(S.G.sum[r * CH + 2] / n);
+        rgba[c * 4 + 3] = roundByte(S.G.sum[r * CH + 3] / n);
     }
 }
 
@@ -459,13 +465,19 @@ export fn pass2End() u32 {
     // another paint and has some of it smeared in; an inner cell is surrounded
     // by its own. If there are no inner cells (a thin or small cluster), all
     // cells are used.
-    const sums_addr = memory.alloc(@as(usize, groups) * 8 * 8);
-    const colors_addr = memory.alloc(@as(usize, groups) * 3 * 8);
-    if (sums_addr == 0 or colors_addr == 0) return 0;
+    const sums_addr = memory.alloc(@as(usize, groups) * 10 * 8);
+    const colors_addr = memory.alloc(@as(usize, groups) * CH * 8);
+    const cc_addr = memory.alloc(@as(usize, groups) * CH);
+    if (sums_addr == 0 or colors_addr == 0 or cc_addr == 0) return 0;
+    // Said as it is counted (see pass1): each cluster's color, taken where
+    // it is worked out; a cluster lies where the picture is when its color
+    // is there at all (as every cell of it is drawn).
+    CC = @ptrFromInt(cc_addr);
+    GROUPS = groups;
     const sums = @as([*]f64, @ptrFromInt(sums_addr));
     const colors = @as([*]f64, @ptrFromInt(colors_addr));
     var g: usize = 0;
-    while (g < @as(usize, groups) * 8) : (g += 1) sums[g] = 0;
+    while (g < @as(usize, groups) * 10) : (g += 1) sums[g] = 0;
     c = 0;
     while (c < total) : (c += 1) {
         const x = c % NX;
@@ -483,27 +495,92 @@ export fn pass2End() u32 {
                 }
             }
         }
-        const base = @as(usize, label[c]) * 8 + @as(usize, if (inner) 0 else 4);
-        sums[base] += @floatFromInt(art[c * 3]);
-        sums[base + 1] += @floatFromInt(art[c * 3 + 1]);
-        sums[base + 2] += @floatFromInt(art[c * 3 + 2]);
-        sums[base + 3] += 1;
+        // five numbers a half: the four channels and the count
+        const base = @as(usize, label[c]) * 10 + @as(usize, if (inner) 0 else 5);
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) sums[base + ch] += @floatFromInt(art[c * CH + ch]);
+        sums[base + 4] += 1;
     }
     g = 0;
     while (g < groups) : (g += 1) {
-        const base = g * 8 + @as(usize, if (sums[g * 8 + 3] > 0) 0 else 4);
-        const n = sums[base + 3];
+        const base = g * 10 + @as(usize, if (sums[g * 10 + 4] > 0) 0 else 5);
+        const n = sums[base + 4];
         var ch: usize = 0;
-        while (ch < 3) : (ch += 1) colors[g * 3 + ch] = if (n > 0) sums[base + ch] / n else 0;
+        while (ch < CH) : (ch += 1) {
+            colors[g * CH + ch] = if (n > 0) sums[base + ch] / n else 0;
+            CC[g * CH + ch] = roundByte(colors[g * CH + ch]);
+        }
+    }
+    // Of the clusters where the picture is: how many, and how many colors.
+    VISIBLE = 0;
+    COLORS = 0;
+    const seen_a = memory.alloc(1 << 21);
+    const seen: ?[*]u8 = if (seen_a == 0) null else @ptrFromInt(seen_a);
+    if (seen) |sb| @memset(sb[0 .. 1 << 21], 0);
+    // Colors partly there: their keys, sorted, counted once each.
+    const part_a = memory.alloc(@as(usize, groups) * 4);
+    const part: ?[*]u32 = if (part_a == 0) null else @ptrFromInt(part_a);
+    var np: usize = 0;
+    g = 0;
+    while (g < groups) : (g += 1) {
+        const a = CC[g * CH + 3];
+        if (a == 0) continue;
+        VISIBLE += 1;
+        if (a == 255) {
+            if (seen) |sb| {
+                const k = (@as(u32, CC[g * CH]) << 16) | (@as(u32, CC[g * CH + 1]) << 8) | CC[g * CH + 2];
+                const bit = @as(u8, 1) << @intCast(k & 7);
+                if (sb[k >> 3] & bit == 0) {
+                    sb[k >> 3] |= bit;
+                    COLORS += 1;
+                }
+            }
+        } else if (part) |pp| {
+            pp[np] = (@as(u32, a) << 24) | (@as(u32, CC[g * CH]) << 16) | (@as(u32, CC[g * CH + 1]) << 8) | CC[g * CH + 2];
+            np += 1;
+        }
+    }
+    if (part) |pp| {
+        // Shell sort: small code, no allocation.
+        var gap: usize = np / 2;
+        while (gap > 0) : (gap /= 2) {
+            var a: usize = gap;
+            while (a < np) : (a += 1) {
+                const v = pp[a];
+                var b = a;
+                while (b >= gap and pp[b - gap] > v) : (b -= gap) pp[b] = pp[b - gap];
+                pp[b] = v;
+            }
+        }
+        var i: usize = 0;
+        while (i < np) : (i += 1) if (i == 0 or pp[i] != pp[i - 1]) {
+            COLORS += 1;
+        };
     }
     c = 0;
     while (c < total) : (c += 1) {
         const gr = @as(usize, label[c]);
-        out[c * 3] = roundByte(colors[gr * 3]);
-        out[c * 3 + 1] = roundByte(colors[gr * 3 + 1]);
-        out[c * 3 + 2] = roundByte(colors[gr * 3 + 2]);
+        var ch: usize = 0;
+        while (ch < CH) : (ch += 1) out[c * CH + ch] = roundByte(colors[gr * CH + ch]);
     }
     return groups;
+}
+
+var CC: [*]u8 = undefined;
+var GROUPS: u32 = 0;
+var VISIBLE: u32 = 0;
+var COLORS: u32 = 0;
+/// Each cluster's color, four bytes, in the order clusters are numbered.
+export fn pass2Colors() usize {
+    return @intFromPtr(CC);
+}
+/// How many clusters lie where the picture is.
+export fn pass2Visible() u32 {
+    return VISIBLE;
+}
+/// How many colors those clusters have.
+export fn pass2ColorCount() u32 {
+    return COLORS;
 }
 
 /// Bucket of a link by its strength: the color distance of the two cells,
@@ -512,10 +589,11 @@ export fn pass2End() u32 {
 fn bucketOf(art: [*]const u8, a0: usize, b0: usize, step: f64, buckets: usize) usize {
     var dS: f64 = 0;
     var dT: f64 = 0;
-    split(@floatFromInt(art[a0 * 3]), @floatFromInt(art[a0 * 3 + 1]), @floatFromInt(art[a0 * 3 + 2]),
-        @floatFromInt(art[b0 * 3]), @floatFromInt(art[b0 * 3 + 1]), @floatFromInt(art[b0 * 3 + 2]), &dS, &dT);
+    split(@floatFromInt(art[a0 * CH]), @floatFromInt(art[a0 * CH + 1]), @floatFromInt(art[a0 * CH + 2]),
+        @floatFromInt(art[b0 * CH]), @floatFromInt(art[b0 * CH + 1]), @floatFromInt(art[b0 * CH + 2]), &dS, &dT);
+    const dA = @as(f64, @floatFromInt(art[a0 * CH + 3])) - @as(f64, @floatFromInt(art[b0 * CH + 3]));
     const unit = @max(1.0, LINK_UNIT); // median joint of the picture itself
-    var strength = @sqrt(dS * dS + dT * dT) / unit;
+    var strength = @sqrt(dS * dS + dT * dT + dA * dA) / unit;
     if (strength > 4.0) strength = 4.0;
     const ki = @as(usize, @intFromFloat(strength / step));
     return if (ki < buckets) ki else buckets - 1;

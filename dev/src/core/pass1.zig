@@ -16,6 +16,14 @@
 // While visiting every pixel anyway, the pass also measures the image for
 // free: noise inside cells, differences between neighbours, slope and jitter.
 // Those measurements drive the automatic settings.
+//
+// A PIXEL IS FOUR NUMBERS (CH): its color premultiplied by how much of it is
+// there, and that amount (alpha). Every choice above is made in all four, so
+// whether a cell is there is decided by the very rule that decides its color;
+// a pixel that is not there has no voice in any color. The cell comes out as
+// straight RGBA. The measurements are of COLOR noise: taken on cells wholly
+// there. A picture with no transparency has alpha 255 everywhere: the fourth
+// number never differs, and the result is the one of three.
 
 const memory = @import("memory.zig");
 
@@ -27,10 +35,13 @@ fn sq(x: f64) f64 {
     return x * x;
 }
 
+const CH = 4;
+
 fn dist2(a: [*]const f64, i: usize, b: [*]const f64, j: usize) f64 {
-    return sq(a[i * 3] - b[j * 3]) +
-        sq(a[i * 3 + 1] - b[j * 3 + 1]) +
-        sq(a[i * 3 + 2] - b[j * 3 + 2]);
+    return sq(a[i * CH] - b[j * CH]) +
+        sq(a[i * CH + 1] - b[j * CH + 1]) +
+        sq(a[i * CH + 2] - b[j * CH + 2]) +
+        sq(a[i * CH + 3] - b[j * CH + 3]);
 }
 
 // Pixels in a cell window with its overlap, sized for the worst case the knobs
@@ -56,7 +67,7 @@ export fn setSurroundWeight(v: f64) void {
 }
 
 // Scratch buffers, so nothing is allocated per cell.
-var color: [MAX_WINDOW * 3]f64 = undefined;
+var color: [MAX_WINDOW * CH]f64 = undefined;
 var weight: [MAX_WINDOW]f64 = undefined;
 var inside: [MAX_WINDOW]bool = undefined;
 var offx: [MAX_WINDOW]f64 = undefined; // pixel offset from the cell centre
@@ -71,6 +82,293 @@ var med_buf: [MAX_WINDOW]f64 = undefined; // for per-channel medians
 // Percent of the cell that must agree with the middle pixel for it to stay
 // the anchor.
 const LONELY: usize = 45;
+
+/// Where pixel q lies along the axis from pixel a (all four numbers).
+fn along(q: usize, a: usize, axis: *const [CH]f64) f64 {
+    var t: f64 = 0;
+    var ch: usize = 0;
+    while (ch < CH) : (ch += 1) t += (color[q * CH + ch] - color[a * CH + ch]) * axis[ch];
+    return t;
+}
+/// Squared distance of pixel q from a point (all four numbers).
+fn toAnchor(q: usize, at: *const [CH]f64) f64 {
+    return sq(color[q * CH] - at[0]) + sq(color[q * CH + 1] - at[1]) +
+        sq(color[q * CH + 2] - at[2]) + sq(color[q * CH + 3] - at[3]);
+}
+
+// ───────────────────────── what the page is told ─────────────────────────
+//
+// SAID AS IT IS COUNTED. The page needs three things of the art: how many
+// colors it has where it is there, which coarse bins of color it occupies
+// (the markup color), and the medians of the joints between neighbouring
+// cells, in lightness and in tone (stage 2's units). They are taken here,
+// cell by cell, as each cell is written — never by going over the art again.
+//
+// A joint is a pair of neighbours equally there whose colors differ. Its
+// lightness is |dr+dg+db| / sqrt 3: one of 766 values of the integer sum. Its
+// tone is sqrt(dr²+dg²+db² − lightness²): fixed by the sum of squares and the
+// sum. So both medians are kept exactly in counts of those integers, and the
+// value at the median is computed once, by the very formula of a joint.
+
+const SQRT3: f64 = 1.7320508075688772;
+const S = struct {
+    seen: [*]u8 = undefined, // a bit for each color wholly there
+    part: [*]u32 = undefined, // colors partly there (open addressing, 0 = empty)
+    part_cap: usize = 0,
+    part_n: usize = 0,
+    colors: u32 = 0,
+    occ: [*]u8 = undefined, // 32768 bins
+    light: [*]u64 = undefined, // joints by |sum| (lightness > 0), 766 of them
+    tone_k: [*]u32 = undefined, // joints by (sum of squares, |sum|) (tone > 0)
+    tone_c: [*]u32 = undefined,
+    tone_cap: usize = 0,
+    tone_n: usize = 0,
+    n_light: u64 = 0,
+    n_tone: u64 = 0,
+    ok: bool = false,
+};
+var Z: S = .{};
+
+fn sumBegin() void {
+    Z.ok = false;
+    const seen_a = memory.alloc(1 << 21);
+    const tk = memory.alloc((1 << 16) * 4);
+    const tc = memory.alloc((1 << 16) * 4);
+    const oa = memory.alloc(32768);
+    const la = memory.alloc(766 * 8);
+    if (seen_a == 0 or tk == 0 or tc == 0 or oa == 0 or la == 0) return;
+    Z.occ = @ptrFromInt(oa);
+    Z.light = @ptrFromInt(la);
+    Z.seen = @ptrFromInt(seen_a);
+    @memset(Z.seen[0 .. 1 << 21], 0);
+    Z.part_cap = 0;
+    Z.part_n = 0;
+    Z.colors = 0;
+    @memset(Z.occ[0..32768], 0);
+    @memset(Z.light[0..766], 0);
+    Z.tone_k = @ptrFromInt(tk);
+    Z.tone_c = @ptrFromInt(tc);
+    Z.tone_cap = 1 << 16;
+    @memset(Z.tone_k[0..Z.tone_cap], 0);
+    Z.tone_n = 0;
+    Z.n_light = 0;
+    Z.n_tone = 0;
+    Z.ok = true;
+}
+
+inline fn hash(k: u32) u32 {
+    var x = k *% 0x9E3779B1;
+    x ^= x >> 15;
+    return x;
+}
+
+// A color partly there: a small set, grown by doubling (the old room is
+// given back with the pass).
+fn partAdd(key: u32) void {
+    if (Z.part_cap == 0 or (Z.part_n + 1) * 10 > Z.part_cap * 7) {
+        const cap = if (Z.part_cap == 0) @as(usize, 1 << 12) else Z.part_cap * 2;
+        const a = memory.alloc(cap * 4);
+        if (a == 0) return;
+        const nw: [*]u32 = @ptrFromInt(a);
+        @memset(nw[0..cap], 0);
+        var i: usize = 0;
+        while (i < Z.part_cap) : (i += 1) {
+            const k = Z.part[i];
+            if (k == 0) continue;
+            var h = hash(k) & @as(u32, @intCast(cap - 1));
+            while (nw[h] != 0) h = (h + 1) & @as(u32, @intCast(cap - 1));
+            nw[h] = k;
+        }
+        Z.part = nw;
+        Z.part_cap = cap;
+    }
+    const m = @as(u32, @intCast(Z.part_cap - 1));
+    var h = hash(key) & m;
+    while (Z.part[h] != 0) : (h = (h + 1) & m) if (Z.part[h] == key) return;
+    Z.part[h] = key;
+    Z.part_n += 1;
+    Z.colors += 1;
+}
+
+fn toneAdd(key: u32) void {
+    if ((Z.tone_n + 1) * 10 > Z.tone_cap * 7) {
+        const cap = Z.tone_cap * 2;
+        const ak = memory.alloc(cap * 4);
+        const ac = memory.alloc(cap * 4);
+        if (ak == 0 or ac == 0) return;
+        const nk: [*]u32 = @ptrFromInt(ak);
+        const nc: [*]u32 = @ptrFromInt(ac);
+        @memset(nk[0..cap], 0);
+        var i: usize = 0;
+        while (i < Z.tone_cap) : (i += 1) {
+            const k = Z.tone_k[i];
+            if (k == 0) continue;
+            var h = hash(k) & @as(u32, @intCast(cap - 1));
+            while (nk[h] != 0) h = (h + 1) & @as(u32, @intCast(cap - 1));
+            nk[h] = k;
+            nc[h] = Z.tone_c[i];
+        }
+        Z.tone_k = nk;
+        Z.tone_c = nc;
+        Z.tone_cap = cap;
+    }
+    const m = @as(u32, @intCast(Z.tone_cap - 1));
+    var h = hash(key) & m;
+    while (Z.tone_k[h] != 0) : (h = (h + 1) & m) {
+        if (Z.tone_k[h] == key) {
+            Z.tone_c[h] += 1;
+            return;
+        }
+    }
+    Z.tone_k[h] = key;
+    Z.tone_c[h] = 1;
+    Z.tone_n += 1;
+}
+
+inline fn toneOf(q: u32, at: u32) f64 {
+    const lt = @as(f64, @floatFromInt(at)) / SQRT3;
+    var across = @as(f64, @floatFromInt(q)) - lt * lt;
+    if (across < 0) across = 0;
+    return @sqrt(across);
+}
+
+// A joint between two written cells (four bytes each).
+inline fn sumJoint(out: [*]const u8, a: usize, b: usize) void {
+    if (out[a + 3] != out[b + 3]) return;
+    const dr = @as(i32, out[a]) - @as(i32, out[b]);
+    const dg = @as(i32, out[a + 1]) - @as(i32, out[b + 1]);
+    const db = @as(i32, out[a + 2]) - @as(i32, out[b + 2]);
+    if (dr == 0 and dg == 0 and db == 0) return;
+    const t = dr + dg + db;
+    const at = @as(u32, @intCast(if (t < 0) -t else t));
+    const q = @as(u32, @intCast(dr * dr + dg * dg + db * db));
+    if (at > 0) {
+        Z.light[at] += 1;
+        Z.n_light += 1;
+    }
+    if (toneOf(q, at) > 0) {
+        toneAdd(q * 1024 + at + 1); // never 0: 0 is an empty slot
+        Z.n_tone += 1;
+    }
+}
+
+// A cell just written: its color, its bin, its joints with the left and
+// upper cells (written before it).
+fn sumCell(out: [*]const u8, cell: usize, i: usize, j: usize, NX: usize) void {
+    if (!Z.ok) return;
+    const a = out[cell + 3];
+    if (a == 255) {
+        const k = (@as(u32, out[cell]) << 16) | (@as(u32, out[cell + 1]) << 8) | out[cell + 2];
+        const bit = @as(u8, 1) << @intCast(k & 7);
+        if (Z.seen[k >> 3] & bit == 0) {
+            Z.seen[k >> 3] |= bit;
+            Z.colors += 1;
+        }
+    } else if (a > 0) partAdd((@as(u32, a) << 24) | (@as(u32, out[cell]) << 16) | (@as(u32, out[cell + 1]) << 8) | out[cell + 2]);
+    if (a >= 128) Z.occ[((@as(usize, out[cell]) * 32 >> 8) * 32 + (@as(usize, out[cell + 1]) * 32 >> 8)) * 32 + (@as(usize, out[cell + 2]) * 32 >> 8)] = 1;
+    if (i > 0) sumJoint(out, cell, cell - CH);
+    if (j > 0) sumJoint(out, cell, cell - NX * CH);
+}
+
+/// How many colors the art has where it is there.
+export fn pass1Colors() u32 {
+    return Z.colors;
+}
+/// Where the 32×32×32 bins of color the art occupies lie (1 — occupied).
+export fn pass1Bins() usize {
+    return @intFromPtr(Z.occ);
+}
+/// The medians of the joints: out[0] — lightness, out[1] — tone (0 when
+/// there are none), out[2..3] — how many joints there are of each.
+export fn pass1Joints(out: [*]f64) void {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = @floatFromInt(Z.n_light);
+    out[3] = @floatFromInt(Z.n_tone);
+    if (Z.n_light > 0) {
+        const k = (Z.n_light * 50) / 100;
+        var got: u64 = 0;
+        var at: usize = 1;
+        while (at < 766) : (at += 1) {
+            got += Z.light[at];
+            if (got > k) {
+                out[0] = @as(f64, @floatFromInt(at)) / SQRT3;
+                break;
+            }
+        }
+    }
+    if (Z.n_tone > 0) {
+        // The distinct joints in order of their tone; the median is where
+        // the counts pass half.
+        const n = Z.tone_n;
+        const ai = memory.alloc(n * 4);
+        if (ai == 0) return;
+        const idx: [*]u32 = @ptrFromInt(ai);
+        var w: usize = 0;
+        var i: usize = 0;
+        while (i < Z.tone_cap) : (i += 1) if (Z.tone_k[i] != 0) {
+            idx[w] = @intCast(i);
+            w += 1;
+        };
+        // Each one's tone worked out once; a heap sort by it (small code,
+        // n·log n at worst).
+        const av = memory.alloc(w * 8);
+        if (av == 0) return;
+        const tv: [*]f64 = @ptrFromInt(av);
+        i = 0;
+        while (i < w) : (i += 1) tv[i] = keyTone(Z.tone_k[idx[i]]);
+        heapSort(idx, tv, w);
+        const k = (Z.n_tone * 50) / 100;
+        var got: u64 = 0;
+        for (idx[0..w]) |s| {
+            got += Z.tone_c[s];
+            if (got > k) {
+                out[1] = keyTone(Z.tone_k[s]);
+                break;
+            }
+        }
+    }
+}
+/// Sorts idx[0..n] and tv[0..n] together, by tv ascending.
+fn heapSort(idx: [*]u32, tv: [*]f64, n: usize) void {
+    if (n < 2) return;
+    const swap = struct {
+        fn f(ix: [*]u32, t: [*]f64, x: usize, y: usize) void {
+            const a = ix[x];
+            ix[x] = ix[y];
+            ix[y] = a;
+            const b = t[x];
+            t[x] = t[y];
+            t[y] = b;
+        }
+    }.f;
+    const down = struct {
+        fn f(ix: [*]u32, t: [*]f64, start: usize, end: usize) void {
+            var r = start;
+            while (2 * r + 1 < end) {
+                var c = 2 * r + 1;
+                if (c + 1 < end and t[c] < t[c + 1]) c += 1;
+                if (t[r] >= t[c]) return;
+                swap(ix, t, r, c);
+                r = c;
+            }
+        }
+    }.f;
+    var s = n / 2;
+    while (s > 0) {
+        s -= 1;
+        down(idx, tv, s, n);
+    }
+    var e = n - 1;
+    while (e > 0) : (e -= 1) {
+        swap(idx, tv, 0, e);
+        down(idx, tv, 0, e);
+    }
+}
+fn keyTone(key: u32) f64 {
+    const k = key - 1;
+    return toneOf(k / 1024, k % 1024);
+}
 
 /// Median of the first n values of med_buf (insertion sort in place).
 fn median(n: usize) f64 {
@@ -89,7 +387,7 @@ fn median(n: usize) f64 {
 // cells away, so each neighbour's piece is judged on its own.
 const MAX_SHIFT: i64 = 5;
 const NEIGHBOURS: usize = 121; // (2*5+1)^2
-var sumN: [NEIGHBOURS][3]f64 = undefined;
+var sumN: [NEIGHBOURS][CH]f64 = undefined;
 var cntN: [NEIGHBOURS]f64 = undefined;
 var colShift: [512]i8 = undefined; // column offset of a pixel from the cell
 var rowShift: [512]i8 = undefined; // the same for rows
@@ -134,7 +432,7 @@ var P: Pass = .{};
 /// gx — nx+1 vertical borders, gy — ny+1 horizontal borders. Usually an even
 /// grid from step and origin, but single lines may have been moved by hand.
 /// tolerance — "color tolerance", overlap — "overlap", agree — "agreement".
-/// out — nx*ny RGB cells; broken — 1 where the anchor had to move;
+/// out — nx*ny RGBA cells (straight); broken — 1 where the anchor had to move;
 /// meas — the measurements (see the end of the file).
 /// Returns 1 — done; 0 — too few borders; 2 — a cell window does not fit.
 export fn pass1(
@@ -199,6 +497,7 @@ export fn pass1Begin(
     var clear: usize = 0;
     while (clear < NX * 6) : (clear += 1) rows[clear] = -1e9;
 
+    sumBegin();
     P = .{ .img = img, .W = W, .H = H, .gx = gx, .nx = nx, .gy = gy, .ny = ny,
         .overlap = overlap, .tolerance = tolerance, .agree = agree,
         .out = out, .broken = broken, .meas = meas, .rows = rows, .next = 0 };
@@ -274,6 +573,7 @@ export fn pass1Rows(count: u32) u32 {
             var m: usize = 0;
             var mid: usize = 0;
             var has_mid = false;
+            var whole = true; // every pixel of the cell there: its noise is color noise
             const tx = @as(i64, @intFromFloat(@round(cx)));
             const ty = @as(i64, @intFromFloat(@round(cy)));
 
@@ -285,11 +585,11 @@ export fn pass1Rows(count: u32) u32 {
                     if (px < 0 or px >= @as(i64, @intCast(W))) continue;
                     if (m >= MAX_WINDOW) break;
                     const src = (@as(usize, @intCast(py)) * @as(usize, @intCast(W)) +
-                        @as(usize, @intCast(px))) * 3;
-                    color[m * 3] = @floatFromInt(img[src]);
-                    color[m * 3 + 1] = @floatFromInt(img[src + 1]);
-                    color[m * 3 + 2] = @floatFromInt(img[src + 2]);
+                        @as(usize, @intCast(px))) * CH;
+                    var ch0: usize = 0;
+                    while (ch0 < CH) : (ch0 += 1) color[m * CH + ch0] = @floatFromInt(img[src + ch0]);
                     inside[m] = (py >= iy0 and py < iy1 and px >= ix0 and px < ix1);
+                    if (inside[m] and img[src + 3] < 255) whole = false;
                     edge[m] = inside[m] and (py == iy0 or py == iy1 - 1 or px == ix0 or px == ix1 - 1);
                     if (!inside[m]) {
                         const dxi = @as(i64, colShift[@intCast(px - ox0)]);
@@ -308,11 +608,12 @@ export fn pass1Rows(count: u32) u32 {
                     m += 1;
                 }
             }
-            const cell = (j * NX + i) * 3;
+            const cell = (j * NX + i) * CH;
             if (m == 0) {
                 out[cell] = 0;
                 out[cell + 1] = 0;
                 out[cell + 2] = 0;
+                out[cell + 3] = 0;
                 broken[j * NX + i] = 0;
                 continue;
             }
@@ -327,7 +628,7 @@ export fn pass1Rows(count: u32) u32 {
                 }
             }
             var bit: u8 = 0;
-            var anchor: [3]f64 = .{ color[mid * 3], color[mid * 3 + 1], color[mid * 3 + 2] };
+            var anchor: [CH]f64 = .{ color[mid * CH], color[mid * CH + 1], color[mid * CH + 2], color[mid * CH + 3] };
             {
                 // THE MIDDLE PIXEL, UNLESS IT IS ALONE. The anchor stays the
                 // middle pixel, but if almost nothing in the cell backs it,
@@ -364,17 +665,17 @@ export fn pass1Rows(count: u32) u32 {
                     if (dmax > 4 * n2) {
                         const pa = @as(usize, own[da]);
                         const pb = @as(usize, own[db]);
-                        var axis: [3]f64 = .{ color[pb * 3] - color[pa * 3], color[pb * 3 + 1] - color[pa * 3 + 1], color[pb * 3 + 2] - color[pa * 3 + 2] };
-                        const len = @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+                        var axis: [CH]f64 = undefined;
                         var ch: usize = 0;
-                        while (ch < 3) : (ch += 1) axis[ch] /= len;
+                        while (ch < CH) : (ch += 1) axis[ch] = color[pb * CH + ch] - color[pa * CH + ch];
+                        const len = @sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2] + axis[3] * axis[3]);
+                        ch = 0;
+                        while (ch < CH) : (ch += 1) axis[ch] /= len;
                         // projections on the line, sorted
                         a2 = 0;
                         while (a2 < kn) : (a2 += 1) {
                             const pq = @as(usize, own[a2]);
-                            med_buf[a2] = (color[pq * 3] - color[pa * 3]) * axis[0] +
-                                (color[pq * 3 + 1] - color[pa * 3 + 1]) * axis[1] +
-                                (color[pq * 3 + 2] - color[pa * 3 + 2]) * axis[2];
+                            med_buf[a2] = along(pq, pa, &axis);
                         }
                         var iq: usize = 1;
                         while (iq < kn) : (iq += 1) {
@@ -400,9 +701,7 @@ export fn pass1Rows(count: u32) u32 {
                             a2 = 0;
                             while (a2 < kn) : (a2 += 1) {
                                 const pq = @as(usize, own[a2]);
-                                const t = (color[pq * 3] - color[pa * 3]) * axis[0] +
-                                    (color[pq * 3 + 1] - color[pa * 3 + 1]) * axis[1] +
-                                    (color[pq * 3 + 2] - color[pa * 3 + 2]) * axis[2];
+                                const t = along(pq, pa, &axis);
                                 if (t < cut) n_low += 1 else n_high += 1;
                             }
                             if (n_low > 0 and n_high > 0) {
@@ -410,23 +709,20 @@ export fn pass1Rows(count: u32) u32 {
                                 // The MEDIAN of the winning side, not its mean:
                                 // half-blurred edge pixels pull a mean into the mix.
                                 ch = 0;
-                                while (ch < 3) : (ch += 1) {
+                                while (ch < CH) : (ch += 1) {
                                     var nq: usize = 0;
                                     var aq: usize = 0;
                                     while (aq < kn) : (aq += 1) {
                                         const pq = @as(usize, own[aq]);
-                                        const t = (color[pq * 3] - color[pa * 3]) * axis[0] +
-                                            (color[pq * 3 + 1] - color[pa * 3 + 1]) * axis[1] +
-                                            (color[pq * 3 + 2] - color[pa * 3 + 2]) * axis[2];
+                                        const t = along(pq, pa, &axis);
                                         if ((t < cut) != low_wins) continue;
-                                        med_buf[nq] = color[pq * 3 + ch];
+                                        med_buf[nq] = color[pq * CH + ch];
                                         nq += 1;
                                     }
                                     anchor[ch] = median(nq);
                                 }
                                 // the middle pixel landed on the losing side: the cell is broken
-                                const dt = sq(color[mid * 3] - anchor[0]) + sq(color[mid * 3 + 1] - anchor[1]) +
-                                    sq(color[mid * 3 + 2] - anchor[2]);
+                                const dt = toAnchor(mid, &anchor);
                                 if (dt > n2) bit = 1;
                                 backers = kn; // the anchor is chosen, loneliness no longer matters
                             }
@@ -438,11 +734,11 @@ export fn pass1Rows(count: u32) u32 {
                     // median alone smears edges into an in-between color, so
                     // it is only an aim: the anchor becomes the pixel closest
                     // to it that has at least one look-alike in the cell.
-                    var med: [3]f64 = undefined;
+                    var med: [CH]f64 = undefined;
                     var ch: usize = 0;
-                    while (ch < 3) : (ch += 1) {
+                    while (ch < CH) : (ch += 1) {
                         var b2: usize = 0;
-                        while (b2 < kn) : (b2 += 1) med_buf[b2] = color[@as(usize, own[b2]) * 3 + ch];
+                        while (b2 < kn) : (b2 += 1) med_buf[b2] = color[@as(usize, own[b2]) * CH + ch];
                         med[ch] = median(kn);
                     }
                     anchor = med;
@@ -461,14 +757,13 @@ export fn pass1Rows(count: u32) u32 {
                             }
                         }
                         if (backed == 0) continue;
-                        const d = sq(color[pa * 3] - med[0]) + sq(color[pa * 3 + 1] - med[1]) +
-                            sq(color[pa * 3 + 2] - med[2]);
+                        const d = toAnchor(pa, &med);
                         if (d < best_d) {
                             best_d = d;
                             best = pa;
                         }
                     }
-                    if (best != kn) anchor = .{ color[best * 3], color[best * 3 + 1], color[best * 3 + 2] };
+                    if (best != kn) anchor = .{ color[best * CH], color[best * CH + 1], color[best * CH + 2], color[best * CH + 3] };
                     bit = 1;
                 }
             }
@@ -477,6 +772,7 @@ export fn pass1Rows(count: u32) u32 {
             var sx: f64 = 0;
             var sy: f64 = 0;
             var sz: f64 = 0;
+            var sa: f64 = 0;
             var total: f64 = 0;
 
             // BILATERAL WEIGHT: the farther from the anchor in color and from
@@ -486,60 +782,67 @@ export fn pass1Rows(count: u32) u32 {
             var q: usize = 0;
             while (q < kn) : (q += 1) {
                 const pq = own[q];
-                const dc = sq(color[pq * 3] - anchor[0]) + sq(color[pq * 3 + 1] - anchor[1]) +
-                    sq(color[pq * 3 + 2] - anchor[2]);
+                const dc = toAnchor(pq, &anchor);
                 const dr = offx[pq] * offx[pq] + offy[pq] * offy[pq];
                 const w = @exp(-dc / (2 * n2)) * @exp(-dr / (2 * rs2));
-                sx += color[pq * 3] * w;
-                sy += color[pq * 3 + 1] * w;
-                sz += color[pq * 3 + 2] * w;
+                sx += color[pq * CH] * w;
+                sy += color[pq * CH + 1] * w;
+                sz += color[pq * CH + 2] * w;
+                sa += color[pq * CH + 3] * w;
                 total += w;
             }
             if (total <= 0) {
                 sx = anchor[0];
                 sy = anchor[1];
                 sz = anchor[2];
+                sa = anchor[3];
                 total = 1;
             }
             const cx0 = sx / total;
             const cy0 = sy / total;
             const cz0 = sz / total;
+            const ca0 = sa / total;
 
             var rs: usize = 0;
             while (rs < NEIGHBOURS) : (rs += 1) {
                 sumN[rs][0] = 0;
                 sumN[rs][1] = 0;
                 sumN[rs][2] = 0;
+                sumN[rs][3] = 0;
                 cntN[rs] = 0;
             }
             p = 0;
             while (p < m) : (p += 1) {
                 if (inside[p]) continue;
                 const rr = @as(usize, neighbour[p]);
-                sumN[rr][0] += color[p * 3];
-                sumN[rr][1] += color[p * 3 + 1];
-                sumN[rr][2] += color[p * 3 + 2];
+                sumN[rr][0] += color[p * CH];
+                sumN[rr][1] += color[p * CH + 1];
+                sumN[rr][2] += color[p * CH + 2];
+                sumN[rr][3] += color[p * CH + 3];
                 cntN[rr] += 1;
             }
             var ax: f64 = 0;
             var ay: f64 = 0;
             var az: f64 = 0;
+            var aa: f64 = 0;
             var an: f64 = 0;
             rs = 0;
             while (rs < NEIGHBOURS) : (rs += 1) {
                 const k = cntN[rs];
                 if (k == 0) continue;
                 const d = sq(sumN[rs][0] / k - cx0) + sq(sumN[rs][1] / k - cy0) +
-                    sq(sumN[rs][2] / k - cz0);
+                    sq(sumN[rs][2] / k - cz0) + sq(sumN[rs][3] / k - ca0);
                 if (d >= s2) continue; // a neighbour of another paint: its piece is not taken
                 ax += sumN[rs][0];
                 ay += sumN[rs][1];
                 az += sumN[rs][2];
+                aa += sumN[rs][3];
                 an += k;
             }
             var itx = sx;
             var ity = sy;
             var itz = sz;
+            var ita = sa;
             var itn = total;
             if (an > 0) {
                 // The overlap has a low voice: at most OVERLAP_WEIGHT of the inside.
@@ -549,16 +852,34 @@ export fn pass1Rows(count: u32) u32 {
                 itx += ax * w;
                 ity += ay * w;
                 itz += az * w;
+                ita += aa * w;
                 itn += an * w;
             }
 
-            out[cell] = roundByte(itx / itn);
-            out[cell + 1] = roundByte(ity / itn);
-            out[cell + 2] = roundByte(itz / itn);
+            // Straight color out of the premultiplied mean: divided by how
+            // much of the cell is there. A cell wholly there is taken as it
+            // is; a cell not there at all has no color.
+            const alpha = ita / itn;
+            const A = roundByte(alpha);
+            const un: f64 = if (A == 255) 1.0 else if (A == 0) 0.0 else 255.0 / alpha;
+            out[cell] = roundByte(itx / itn * un);
+            out[cell + 1] = roundByte(ity / itn * un);
+            out[cell + 2] = roundByte(itz / itn * un);
+            out[cell + 3] = A;
+            sumCell(out, cell, i, j, NX);
 
             // MEASUREMENTS FOR FREE. Spread — over the inside pixels already
             // visited. Neighbour difference — with the left and upper cells,
             // already computed.
+            // A cell partly or wholly not there measures nothing: its edge
+            // with nothing is no color noise. It is not a neighbour to
+            // measure against either.
+            const now = (j % 2) * NX * 3 + i * 3;
+            const prev = ((j + 1) % 2) * NX * 3 + i * 3;
+            if (!whole) {
+                rows[now] = -1e9;
+                continue;
+            }
             var q1: [3]f64 = .{ 0, 0, 0 };
             var q2: [3]f64 = .{ 0, 0, 0 };
             var qn: f64 = 0;
@@ -567,7 +888,7 @@ export fn pass1Rows(count: u32) u32 {
                 if (!inside[p]) continue;
                 var c: usize = 0;
                 while (c < 3) : (c += 1) {
-                    const v = color[p * 3 + c];
+                    const v = color[p * CH + c];
                     q1[c] += v;
                     q2[c] += v * v;
                 }
@@ -584,8 +905,6 @@ export fn pass1Rows(count: u32) u32 {
                 spread = @sqrt(spread);
             }
             // neighbour difference — by the INSIDE color, with the left and upper cells
-            const now = (j % 2) * NX * 3 + i * 3;
-            const prev = ((j + 1) % 2) * NX * 3 + i * 3;
             const mine: [3]f64 = .{ cx0, cy0, cz0 };
             var diff: f64 = 0;
             if (i > 0 and rows[now - 3] > -1e8) {
@@ -626,7 +945,7 @@ export fn pass1Rows(count: u32) u32 {
                     var kv: f64 = 0;
                     var q5: usize = 0;
                     while (q5 < kn) : (q5 += 1) {
-                        const v = color[@as(usize, own[q5]) * 3 + c5];
+                        const v = color[@as(usize, own[q5]) * CH + c5];
                         sm += v;
                         kv += v * v;
                     }
@@ -671,7 +990,7 @@ export fn pass1Rows(count: u32) u32 {
                         q4 = 0;
                         while (q4 < kn) : (q4 += 1) {
                             const pp = own[q4];
-                            const v = color[pp * 3 + c4];
+                            const v = color[pp * CH + c4];
                             psv += v;
                             psxv += (offx[pp] - mx) * v;
                             psyv += (offy[pp] - my) * v;
@@ -688,7 +1007,7 @@ export fn pass1Rows(count: u32) u32 {
                         while (q4 < kn) : (q4 += 1) {
                             const pp = own[q4];
                             const pred = mv + b1 * (offx[pp] - mx) + b2 * (offy[pp] - my);
-                            const r = color[pp * 3 + c4] - pred;
+                            const r = color[pp * CH + c4] - pred;
                             rest += r * r;
                         }
                         jitter2 += rest / n0;
@@ -929,7 +1248,7 @@ fn fitPlane(pick: []const u32, pl: *Plane) bool {
         var psxv: f64 = 0;
         var psyv: f64 = 0;
         for (pick) |pp| {
-            const v = color[@as(usize, pp) * 3 + c];
+            const v = color[@as(usize, pp) * CH + c];
             psv += v;
             psxv += (offx[pp] - mx) * v;
             psyv += (offy[pp] - my) * v;
@@ -950,7 +1269,7 @@ fn offPlane(pick: []const u32, pl: *const Plane) f64 {
         var c: usize = 0;
         while (c < 3) : (c += 1) {
             const pred = pl.mv[c] + pl.b1[c] * (offx[pp] - pl.mx) + pl.b2[c] * (offy[pp] - pl.my);
-            const r = color[@as(usize, pp) * 3 + c] - pred;
+            const r = color[@as(usize, pp) * CH + c] - pred;
             sum += r * r;
         }
     }

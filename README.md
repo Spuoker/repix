@@ -7,11 +7,10 @@ to edit.
 
 **The pixels are still in the file. JPEG only fogged them. Repix develops them.**
 
-It is also made with care. Nothing in it jumps or flickers: every button,
-panel and picture moves to its place by one law of motion, like a thing with
-a little weight to it — see [The engine](#the-engine).
+Nothing in it jumps or flickers: every button, panel and picture moves to
+its place by one law of motion — see [The engine](#the-engine).
 
-**From the concept to this release: nine days.**
+**From the concept to the first release: nine days.**
 
 <img width="1920" height="1080" alt="Снимок экрана 2026-09-28 174003" src="https://github.com/user-attachments/assets/66da5780-752e-4f3a-9c04-9210fc2d1896" />
 
@@ -23,16 +22,29 @@ offer to install it as an app, on a phone too, and then it works offline.
 **From disk:** download `repix.html` and double-click it. That's it.
 
 Nothing to install, no server, no account, no internet. It is one page of
-about 630 KB with everything inside: the computing core (WebAssembly,
-~118 KB) and the font. On Android, open the file right from the phone; an
+about 750 KB with everything inside: the computing core (WebAssembly,
+~126 KB) and the font. On Android, open the file right from the phone; an
 iPhone won't run a saved page, so use the web link there.
 
 ## Using it
 
 Drop a picture onto the window, or press **Open**. Repix finds the grid by
 itself. If it gets it wrong, turn the knobs — the result follows at once. A
-knob's field takes maths too: type `12/3` or `(2+3)*4`. **F11** gives a clean
-full screen, with no browser bar sliding over the buttons. Everything the
+knob's field takes maths too: type `12/3` or `(2+3)*4`. A PNG with a
+transparent background stays transparent, down to the saved result; its
+background becomes an empty paint that works as an eraser. **F11** gives a clean
+full screen, with no browser bar sliding over the buttons.
+
+What is counted is shown as it is counted. On stage 1 a line in the markup
+color goes down the picture: above it the art is new, below it still the old.
+On stages 2 and 3 the borders of clusters and paints change with the picture,
+and they are drawn at any zoom: lines up close, a tint from afar.
+**Auto settings** is dimmed while its settings stand and is there again after
+any change. **Motion** in the menu turns all gliding off; the system's
+"reduce motion" setting does the same by itself. In a window too low for
+both, the knob panel gives way to the pictures: it folds into one row, and
+if that is still more than a third of the window, it hides under its tab and
+comes back when there is room. Everything the
 mouse, keys and fingers can do is listed in **Guide**, in the settings menu
 (the gear on the **Repix** plate).
 
@@ -58,8 +70,8 @@ your hand:
 2. **Clusters** — neighbouring cells of one paint are joined into clusters
    with one color each; the noise inside them averages out.
 3. **Merge** — clusters of the same color anywhere in the work become one
-   paint. Weight decides: a paint spread over five hundred cells is the
-   author's, five stray cells are a leftover.
+   paint. Size decides: the larger a paint across the work, the harder it
+   is to merge away: five hundred cells are the author's, five are a leftover.
 4. **Paint** — no more algorithms, your turn. Brush, fill and pipette finish
    what did not come together; paints can be copied from any picture, edited, added,
    deleted, and the unused ones cleaned out.
@@ -81,36 +93,48 @@ hand changes *what* goes into a cell, not what the cell looks like.
 - **Thresholds are built from sources, not tuned per work.** The floor comes
   from 8-bit color, the multiple from the measured noise, the ceiling from
   how close different paints of the work come.
+- **A pixel is its color and how much of it is there.** Transparency is data,
+  not a guess: a pixel that is not there has no voice in any color, whether a
+  cell is there is decided by the rule that decides its color, and a paint
+  never merges with nothing.
 - **One live source per layer.** Not three variants to pick the best from.
 - A threshold tuned on one work means nothing: it is measured on a bench with
   known answers — and then checked by eye.
 
 ## The engine
 
-Repix does not sit on a UI library. It has a **framework-engine** of its own,
-made for it and living inside the same page. The ideas it stands on:
+Repix does not sit on a UI library. Its interface runs on an engine of its
+own, living inside the same page: **GTB layout — Goal, Trigger, Band.**
 
-- **Everything that moves goes to a goal.** A button finding its new place, a
-  panel rolling into one row, a scroll, a fading hint, a theme color, the
-  pictures' zoom — one law of motion for all of them: a mass on a spring with
-  a damper. A new goal on the way turns it without a jerk; let go with speed,
-  it glides and slows; pushed past an edge, it stretches and springs back.
-- **Triggers, not recomputation.** A change is an input, its consequence is
-  worked out from data before anything is painted. When nothing changes,
-  nothing runs.
-- **Thresholds are data.** How the panels fold at a given width is a function
-  of widths measured once; where the fold would change is worked out from the
-  same numbers. Crossing such a threshold lays the panel out anew — smoothly,
-  even while the window is being dragged.
-- **The standard is the engine's.** Every object is a description; every
+- **Goal.** Everything that moves goes to a goal: a button finding its new
+  place, a panel rolling into one row, a scroll, a hint appearing, a theme
+  color, the pictures' zoom. One law of motion for all of them: a mass on a
+  spring with a damper. A new goal on the way turns it and keeps its speed;
+  let go with speed, it glides and slows; pushed past an edge, it stretches
+  and springs back. Nothing is animated.
+- **Trigger.** Work starts only on a change, and its consequence is worked
+  out once, before anything is painted. When nothing changes, nothing runs.
+  The engine watches the page itself: whatever is added, shown or hidden is
+  laid out and moved in by the same rules.
+- **Band.** The layout changes only at thresholds, and no threshold is
+  written by hand. Widths are measured once; from them the engine works out
+  the fold for any width and the band of widths where that fold holds.
+  The edges of the band are handed to the browser, and the browser tells
+  when the window crosses one: that is the trigger. Inside a band a new size
+  of the window lays nothing out. A decision reads where things
+  will stand in the end, so across several thresholds at once every part
+  gets one goal and goes straight there. The same width gives the same layout
+  whichever way the window came. A scroll bar is a consequence of the layout,
+  never its input.
+- **Descriptions and one standard.** Every object is a description; every
   argument has one standard in one table, and a description names only what
-  differs. No window has rules of its own.
-- **Pixel style out of the box.** Sizes, gaps, frames and shadows are counted
-  in grid pixels, and a grid pixel is a whole number of screen pixels, so
-  edges stay sharp at 125% or on a phone. The font is a pixel font, the icons
-  are drawn cell by cell, the pictures are shown without smoothing, and what
-  comes to rest lands on the grid. Motion itself runs smoothly between the
-  pixels — the style is pixel, the movement is not.
+  differs. A new ability goes into the engine for everyone, never into one
+  window.
+- **Pixel style.** Sizes, gaps, frames and shadows are counted in grid
+  pixels, and a grid pixel is a whole number of screen pixels, so edges stay
+  sharp at 125% or on a phone. The font is a pixel font, the icons are drawn
+  cell by cell, the pictures are shown without smoothing, and what comes to
+  rest lands on the grid. Motion runs smoothly between the pixels.
 
 The model and the rules for working on it: [`dev/ENGINE.md`](dev/ENGINE.md).
 
@@ -144,7 +168,7 @@ Running needs nothing but a browser.
 Why embed instead of shipping `core.wasm` next to the page: a page opened from
 disk may not read a neighbouring file — browsers forbid it. One file works
 everywhere: from disk, from a USB stick, from any web host, on a phone (on an
-iPhone — from a web host). The cost is a third on top of the core, ~39 KB of
+iPhone — from a web host). The cost is a third on top of the core, ~42 KB of
 base64 overhead.
 
 ## What is where
@@ -157,7 +181,7 @@ README.md               this description
 LICENSE                 GPL-3.0
 .gitignore              what git leaves out: build cache, zip, test pictures
 dev/                    everything else
-  ENGINE.md             the framework-engine: its model, its parts, how to
+  ENGINE.md             the engine (GTB layout): its model, its parts, how to
                         work on it
   build.zig             `zig build`: core -> wasm, page, zip, site
   src/
@@ -171,7 +195,7 @@ dev/                    everything else
       pass3.zig         pass 3: clusters -> paints across the work, palette
     ui/
       template.html     the live source of the page: the interface and the
-                        framework-engine it runs on
+                        engine it runs on
       pipeline.js       how the page drives the core, as pure functions; the
                         build puts it into the page, the tests import it
       worker.js         the core's own thread: the page sends it jobs and
@@ -227,15 +251,14 @@ Repix holds a step of 6.000 on the same file down to q=0.3.
 
 **pixeldetector** (Astropulse, MIT) — the one inside Aseprite via Retro
 Diffusion. It takes peaks of a neighbour-difference profile and the median
-distance between them, without searching for the origin. On our 27 pairs it
-found the art size once; Repix finds 26 of 27. The bilateral weight in pass 1
+distance between them, without searching for the origin. On our real pairs it
+found the art size once; Repix finds 26 of 28. The bilateral weight in pass 1
 was taken from there and won on both measures.
 
 ## Numbers
 
-Grid search on 27 real pairs with hand-made answers: the median step error is
-0.016%. The art size is found for 26 of 27; the miss is an 800×600 picture that
-has no trace of a lattice at all.
+Grid search on 28 real pairs with hand-made answers: the median step error is
+0.015%. The art size is found for 26 of 28.
 
 Pass 1 run over finished art does not change a single cell — a fixed point:
 with no overlap even at a wide tolerance, and with overlap at the settings the

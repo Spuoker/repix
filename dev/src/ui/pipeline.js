@@ -39,7 +39,8 @@ const f64=(E,addr,n)=>new Float64Array(E.memory.buffer,addr,n);
 const alloc=(E,n)=>{ const p=E.allocMemory(n)>>>0; if(!p) throw new Error('out of memory'); return p; };
 function copyIn(E,bytes){ const p=alloc(E,bytes.length); new Uint8Array(E.memory.buffer,p,bytes.length).set(bytes); return p; }
 
-/** The grid of an image already in the core's memory at img (RGB). */
+/** The grid of an image already in the core's memory at img (RGBA, the
+    color premultiplied by alpha: four bytes a pixel). */
 export function searchGrid(E,img,w,h){
   const addr=alloc(E,8*8);
   if(!E.findGrid(img,w,h,GRID_STEP.min,GRID_STEP.max,addr)) return null;
@@ -86,7 +87,7 @@ export function agreement(k,share){
     between calls, and one call over the whole picture would show it only when
     done. beginPass1 lays the pass out and returns it:
       code   — 1: begun; 0: too few borders;
-      out    — where the art lies in memory (nx*ny RGB cells);
+      out    — where the art lies in memory (nx*ny straight RGBA cells);
       rows(n) — runs n more rows: 1 — rows are left, 3 — all done,
                2 — a cell window does not fit;
       end()  — the measurements of the picture (see the end of pass1.zig).
@@ -96,7 +97,7 @@ export function beginPass1(E,img,w,h,gx,gy,k,share){
   const pgx=alloc(E,gx.length*8), pgy=alloc(E,gy.length*8);
   f64(E,pgx,gx.length).set(gx);
   f64(E,pgy,gy.length).set(gy);
-  const out=alloc(E,nx*ny*3), broken=alloc(E,nx*ny), meas=alloc(E,8*16);
+  const out=alloc(E,nx*ny*4), broken=alloc(E,nx*ny), meas=alloc(E,8*16);
   E.setSurroundWeight(k.surroundWeight);
   E.setPlaceWidth(k.placeWidth);
   const code=E.pass1Begin(img,w,h,pgx,nx,pgy,ny,k.overlap,tolerance(k),agreement(k,share),out,broken,meas);
@@ -140,9 +141,12 @@ function splitDiff(dr,dg,db){
   let across=dr*dr+dg*dg+db*db-along*along; if(across<0) across=0;
   return [Math.abs(along), Math.sqrt(across)];
 }
+// Cells are straight RGBA; a joint of COLOR is between cells equally there:
+// the edge between a cell and nothing is no unit of color difference.
 export function jointsOf(art,nw,nh){
   const S=[], T=[];
   const pair=(i,j)=>{
+    if(art[i+3]!==art[j+3]) return;
     const dr=art[i]-art[j], dg=art[i+1]-art[j+1], db=art[i+2]-art[j+2];
     if(!dr&&!dg&&!db) return;
     const [ds,dt]=splitDiff(dr,dg,db);
@@ -150,12 +154,57 @@ export function jointsOf(art,nw,nh){
     if(dt>0) T.push(dt);
   };
   for(let y=0;y<nh;y++) for(let x=0;x<nw;x++){
-    const i=(y*nw+x)*3;
-    if(x+1<nw) pair(i,i+3);
-    if(y+1<nh) pair(i,i+nw*3);
+    const i=(y*nw+x)*4;
+    if(x+1<nw) pair(i,i+4);
+    if(y+1<nh) pair(i,i+nw*4);
   }
   S.sort((a,b)=>a-b); T.sort((a,b)=>a-b);
   return {S,T};
+}
+/* THE UNITS OF THE JOINTS without the rows: the medians of lightness and of
+   tone, the very values fromShare(row,50) gives on the sorted rows — taken by
+   selection, not by sorting tens of millions of numbers. What stages 2 needs
+   of the joints is these two; a big work keeps the rows to itself. */
+function nth(a,n,k){
+  let lo=0, hi=n-1;
+  while(lo<hi){
+    const pv=a[(lo+hi)>>1]; let i=lo, j=hi;
+    while(i<=j){ while(a[i]<pv) i++; while(a[j]>pv) j--; if(i<=j){ const t=a[i]; a[i]=a[j]; a[j]=t; i++; j--; } }
+    if(k<=j) hi=j; else if(k>=i) lo=i; else return a[k];
+  }
+  return a[k];
+}
+export function jointUnits(art,nw,nh){
+  const S=new Float64Array(nw*nh*2), T=new Float64Array(nw*nh*2); let ns=0, nt=0;
+  const pair=(i,j)=>{
+    if(art[i+3]!==art[j+3]) return;
+    const dr=art[i]-art[j], dg=art[i+1]-art[j+1], db=art[i+2]-art[j+2];
+    if(!dr&&!dg&&!db) return;
+    const [ds,dt]=splitDiff(dr,dg,db);
+    if(ds>0) S[ns++]=ds;
+    if(dt>0) T[nt++]=dt;
+  };
+  for(let y=0;y<nh;y++) for(let x=0;x<nw;x++){
+    const i=(y*nw+x)*4;
+    if(x+1<nw) pair(i,i+4);
+    if(y+1<nh) pair(i,i+nw*4);
+  }
+  const at=(a,n)=>n ? nth(a,n,Math.min(n-1,Math.floor(n*50/100)))+1e-6 : 0;
+  return {mS:at(S,ns), mT:at(T,nt)};
+}
+// The median of the joints in lightness and in tone: from the units, or
+// from the rows.
+const jointMedians=j=>j.mS!==undefined ? [j.mS, j.mT] : [fromShare(j.S,50), fromShare(j.T,50)];
+/* WHAT PASS 1 TOLD as it wrote the art (pass1.zig): how many colors are
+   there, which coarse bins of color the art occupies (for the markup color),
+   and the medians of its joints — the values fromShare(row,50) gives on the
+   rows, without the rows. Read before the core's memory is given back. */
+export function pass1Summary(E){
+  const a=alloc(E,4*8); E.pass1Joints(a);
+  const j=f64(E,a,4);
+  return {colors:E.pass1Colors(),
+          occ:new Uint8Array(E.memory.buffer,E.pass1Bins()>>>0,32768).slice(),
+          joints:{mS: j[2]>0 ? j[0]+1e-6 : 0, mT: j[3]>0 ? j[1]+1e-6 : 0}};
 }
 /** A share (0..100) of a sorted row, as a threshold in color units. */
 export function fromShare(row,p){
@@ -175,7 +224,7 @@ export function cellNoise(meas,jitter){
    is the median joint in lightness; cell noise as above. */
 export function groupAdvice(nw,nh,joints,meas,jitter){
   return {minPaint:Math.max(4,Math.round(nw*nh/60)),
-          gauge:+fromShare(joints.S,50).toFixed(1),
+          gauge:+jointMedians(joints)[0].toFixed(1),
           cellNoise:+cellNoise(meas,jitter).toFixed(2)};
 }
 /** Pass 2 IN PARTS, like pass 1: beginPass2 measures and sorts the links and
@@ -191,7 +240,7 @@ export function groupAdvice(nw,nh,joints,meas,jitter){
     keeps the work's own proportion of the median joints in tone and in
     lightness. The result is that of one whole call. */
 export function beginPass2(E,art,nw,nh,k,joints,shown){
-  const mS0=fromShare(joints.S,50), mT0=fromShare(joints.T,50);
+  const [mS0, mT0]=jointMedians(joints);
   const mS=k.gauge, mT=mS0>0 ? mS*mT0/mS0 : mS;
   const p=copyIn(E,art), out=alloc(E,art.length), lab=alloc(E,nw*nh*4);
   E.setCellNoise(k.cellNoise); E.setMinGroup(k.minPaint); E.setGauge(mS,mT);
@@ -203,7 +252,12 @@ export function beginPass2(E,art,nw,nh,k,joints,shown){
     links:n=>E.pass2Links(n),
     preview:()=>{ E.pass2Preview(over); return view().slice(); },
     end:()=>{ const groups=E.pass2End();
-      return {groups, mS, mT,
+      // Told as counted (pass2.zig): each cluster's color in the order the
+      // clusters are numbered (the order they are first met), and of those
+      // where the picture is, how many and how many colors.
+      const cc={colors:new Uint8Array(E.memory.buffer,E.pass2Colors()>>>0,groups*4).slice(),
+                count:groups, order:new Int32Array(groups).map((_,i)=>i)};
+      return {groups, mS, mT, cc, visible:E.pass2Visible(), colors:E.pass2ColorCount(),
               art:new Uint8Array(E.memory.buffer,out,art.length).slice(),
               label:new Int32Array(E.memory.buffer,lab,nw*nh).slice()}; }};
 }
@@ -219,10 +273,10 @@ export function pass2(E,art,nw,nh,k,joints){
    the order the spread probes them in. */
 export function clusterColors(art,label){
   let mx=0; for(let i=0;i<label.length;i++) if(label[i]>mx) mx=label[i];
-  const colors=new Uint8Array((mx+1)*3), seen=new Uint8Array(mx+1), order=[];
+  const colors=new Uint8Array((mx+1)*4), seen=new Uint8Array(mx+1), order=[];
   for(let i=0;i<label.length;i++){
     const g=label[i]; if(g<0||seen[g]) continue;
-    colors.set(art.subarray(i*3,i*3+3), g*3); seen[g]=1; order.push(g);
+    colors.set(art.subarray(i*4,i*4+4), g*4); seen[g]=1; order.push(g);
   }
   return {colors, count:mx+1, order};
 }
@@ -233,12 +287,13 @@ export function clusterColors(art,label){
    exactly the distance merging eats. At most about 600 clusters are probed. */
 export function spreadOf(cc){
   const N=cc.order.length, STEP=Math.max(1,Math.floor(N/600)), probe=[];
-  for(let i=0;i<N;i+=STEP){ const g=cc.order[i]; probe.push([cc.colors[g*3],cc.colors[g*3+1],cc.colors[g*3+2]]); }
+  for(let i=0;i<N;i+=STEP){ const g=cc.order[i]; probe.push([cc.colors[g*4],cc.colors[g*4+1],cc.colors[g*4+2],cc.colors[g*4+3]]); }
   const S=[], T=[];
   for(let a=0;a<probe.length;a++){
     let best=Infinity, bs=0, bt=0;
     for(let b=0;b<probe.length;b++){
-      if(a===b) continue;
+      // color distances are between clusters equally there (see jointsOf)
+      if(a===b || probe[a][3]!==probe[b][3]) continue;
       const dr=probe[a][0]-probe[b][0], dg=probe[a][1]-probe[b][1], db=probe[a][2]-probe[b][2];
       if(!dr&&!dg&&!db) continue;
       const d=dr*dr+dg*dg+db*db;
@@ -272,7 +327,7 @@ export function beginPass3(E,label,nw,nh,cc,k,spread,shown){
   const mS=Math.max(0.01,k.mergeGauge), mT=mS0>0 ? mS*mT0/mS0 : mS;
   const pl=alloc(E,total*4);
   new Int32Array(E.memory.buffer,pl,total).set(label);
-  const pc=copyIn(E,cc.colors), out=alloc(E,total*3), target=alloc(E,cc.count*4);
+  const pc=copyIn(E,cc.colors), out=alloc(E,total*4), target=alloc(E,cc.count*4);
   const over=alloc(E,total*4);
   const view=()=>new Uint8ClampedArray(E.memory.buffer,over,total*4);
   if(shown) view().set(shown); else view().fill(0);
@@ -284,12 +339,12 @@ export function beginPass3(E,label,nw,nh,cc,k,spread,shown){
     preview:()=>{ E.pass3Preview(over); return view().slice(); },
     end:()=>{
       const paints=E.pass3End();
-      const art=new Uint8Array(E.memory.buffer,out,total*3).slice();
+      const art=new Uint8Array(E.memory.buffer,out,total*4).slice();
       const where=new Uint32Array(E.memory.buffer,target,cc.count).slice();
       // Read as many paints as the core actually put out: its palette space is
       // limited, and with zero thresholds there are far more paints than fit.
       const n=E.gatherPalette(pl,total,target,cc.count,pc);
-      const palette=f64(E,E.paletteAddress()>>>0,n*4).slice();
+      const palette=f64(E,E.paletteAddress()>>>0,n*5).slice();   // r, g, b, a, cells
       return {paints, mS, mT, art, where, palette}; }};
 }
 /** Pass 3 whole: the same parts, run at once. */

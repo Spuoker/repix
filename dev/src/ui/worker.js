@@ -14,7 +14,7 @@
    The image lies at the bottom of the core's memory for as long as the work is
    open; every job gives back everything above it before it starts. */
 let E=null, img=0, imgW=0, imgH=0, imageTop=0, rowsDone=0;
-const waiting=[], dropped=new Set();
+const waiting=[], dropped=new Set(), looked=new Set();
 let now=null, drawn=true, busy=false;
 const PART_MS=14;
 const LINKS_PER_CALL=16384;   // stage 2: links resolved per call
@@ -35,6 +35,9 @@ onmessage=e=>{
   // The page drew a picture of the job running now: the next may go. An ack
   // for a job already dropped says nothing about this one.
   if(m.drawn){ if(now && m.drawn===now.id) drawn=true; return; }
+  // The page began to look at a job counted out of sight: from now on it is
+  // shown as it goes.
+  if(m.look){ if(now && m.look===now.id) now.show=true; else looked.add(m.look); return; }
   waiting.push(m); next();
 };
 async function next(){
@@ -43,7 +46,7 @@ async function next(){
   while(waiting.length){
     const job=waiting.shift();
     if(dropped.delete(job.id)){ postMessage({id:job.id, dropped:true}); continue; }
-    now={id:job.id, dropped:false}; drawn=true;
+    now={id:job.id, dropped:false, show:looked.delete(job.id) || job.data.live!==false}; drawn=true;
     let answer;
     try{ answer=await JOBS[job.kind](job.data, now); }
     catch(err){ answer={value:null, error:String(err && err.stack || err)}; }
@@ -66,14 +69,37 @@ async function inParts(job, step, show){
     do code=step(); while(code===1 && performance.now()-t<PART_MS);
     spent+=performance.now()-t;
     if(code!==1) return {code, spent};
-    if(show && drawn){ drawn=false; show(); }
+    if(show && job.show && drawn){ drawn=false; show(); }
     await turn();
     if(job.dropped) return {code:-1, spent};
   }
 }
 const fresh=()=>E.freeMemoryTo(imageTop);
+/* THE BORDERS of what a picture shows, counted here and not on the page: for
+   every cell, whether the one to its right and the one below it are another
+   (a — one number a cell: its color as shown, or its cluster, or its paint).
+   Given as a picture of its own, four bytes a cell: the first — a border on
+   the right, the second — a border below, the fourth — any of them. The page
+   draws lines from it up close and lays it over the work from afar. */
+function edgesOf(a, nw, nh){
+  const out=new Uint8ClampedArray(nw*nh*4);
+  for(let j=0,k=0;j<nh;j++){
+    const last=j+1>=nh;
+    for(let i=0;i<nw;i++,k++){
+      const v=a[k], r = i+1<nw && a[k+1]!==v, b = !last && a[k+nw]!==v;
+      if(r||b){ const o=k*4; if(r) out[o]=255; if(b) out[o+1]=255; out[o+3]=255; }
+    }
+  }
+  return out;
+}
+const shownWith=(job, px, nw, nh)=>{
+  const edges=edgesOf(new Uint32Array(px.buffer, px.byteOffset, nw*nh), nw, nh);
+  postMessage({id:job.id, preview:px, edges}, [px.buffer, edges.buffer]);
+};
 const JOBS={
-  // A new image: the page's decoded picture, read out here and kept as RGB.
+  // A new image: the page's decoded picture, read out here and kept as the
+  // core reads it — four bytes a pixel, the color premultiplied by alpha
+  // (a pixel not there is 0,0,0,0 whatever color the file left under it).
   // Reading a big picture's pixels takes a while — not on the page's thread.
   image(d){
     let s;
@@ -84,11 +110,16 @@ const JOBS={
     } finally { d.bitmap.close(); }
     // Room is asked for first, above what is kept: refused, the image open
     // before stays whole.
-    if(!(E.allocMemory(d.w*d.h*3)>>>0)){ fresh(); return {value:false}; }
+    if(!(E.allocMemory(d.w*d.h*4)>>>0)){ fresh(); return {value:false}; }
     E.resetMemory();
-    img=E.allocMemory(d.w*d.h*3)>>>0; imgW=d.w; imgH=d.h;
+    img=E.allocMemory(d.w*d.h*4)>>>0; imgW=d.w; imgH=d.h;
     const mm=new Uint8Array(E.memory.buffer);
-    for(let i=0,j=img;i<s.length;i+=4,j+=3){ mm[j]=s[i]; mm[j+1]=s[i+1]; mm[j+2]=s[i+2]; }
+    for(let i=0,j=img;i<s.length;i+=4,j+=4){
+      const al=s[i+3];
+      if(al===255){ mm[j]=s[i]; mm[j+1]=s[i+1]; mm[j+2]=s[i+2]; }
+      else{ mm[j]=(s[i]*al+127)/255|0; mm[j+1]=(s[i+1]*al+127)/255|0; mm[j+2]=(s[i+2]*al+127)/255|0; }
+      mm[j+3]=al;
+    }
     imageTop=E.memoryTop();
     return {value:true};
   },
@@ -104,24 +135,27 @@ const JOBS={
       const from=sent, to=rowsDone;
       if(to<=from){ drawn=true; return; }
       sent=to;
-      const src=new Uint8Array(E.memory.buffer,pass.out+from*nw*3,(to-from)*nw*3);
-      const rgba=new Uint8ClampedArray((to-from)*nw*4);
-      for(let i=0,k=0;i<src.length;i+=3,k+=4){ rgba[k]=src[i]; rgba[k+1]=src[i+1]; rgba[k+2]=src[i+2]; rgba[k+3]=255; }
+      // the cells are straight RGBA already
+      const rgba=new Uint8ClampedArray(E.memory.buffer.slice(pass.out+from*nw*4, pass.out+to*nw*4));
       postMessage({id:job.id, rows:{from,to,rgba}}, [rgba.buffer]);
     };
     const {code,spent}=await inParts(job,()=>pass.rows(1),show);
     if(code!==3) return {value:{code}};
     const t=performance.now();
     const meas=pass.end();
-    const art=new Uint8Array(E.memory.buffer,pass.out,pass.nx*pass.ny*3).slice();
-    return {value:{code:1, meas, art, msec:spent+performance.now()-t}, give:[art.buffer]};
+    const art=new Uint8Array(E.memory.buffer,pass.out,pass.nx*pass.ny*4).slice();
+    // What the pass counted as it wrote the art: nothing is gone over again.
+    const sum=pass1Summary(E);
+    return {value:{code:1, meas, art, colors:sum.colors, occ:sum.occ, joints:sum.joints, msec:spent+performance.now()-t},
+            give:[art.buffer, sum.occ.buffer]};
   },
-  // Stage 2: with `shown`, the groups as they stand go out over it.
+  // Stage 2: the groups as they stand go out over `shown` — while the page
+  // looks at them (`live`, or its word later: look).
   async pass2(d, job){
     fresh();
     const pass=beginPass2(E,d.art,d.nw,d.nh,d.k,d.joints,d.shown);
     if(pass.code!==1) return {value:null};          // nothing to count
-    const show=d.shown ? ()=>{ const px=pass.preview(); postMessage({id:job.id, preview:px}, [px.buffer]); } : null;
+    const show=()=>shownWith(job, pass.preview(), d.nw, d.nh);
     let spent=0;
     if(pass.code===1){
       const r=await inParts(job,()=>pass.links(LINKS_PER_CALL),show);
@@ -129,15 +163,17 @@ const JOBS={
       spent=r.spent;
     }
     const t=performance.now();
-    const r=pass.end(); r.msec=spent+performance.now()-t;
-    return {value:r, give:[r.art.buffer, r.label.buffer]};
+    const r=pass.end();
+    r.edges=edgesOf(r.label, d.nw, d.nh);            // the clusters' borders, exactly
+    r.msec=spent+performance.now()-t;
+    return {value:r, give:[r.art.buffer, r.label.buffer, r.cc.colors.buffer, r.cc.order.buffer, r.edges.buffer]};
   },
-  // Stage 3: with `shown`, the paints laid so far go out over it.
+  // Stage 3: the paints laid so far go out over `shown`, the same way.
   async pass3(d, job){
     fresh();
     const pass=beginPass3(E,d.label,d.nw,d.nh,d.cc,d.k,d.spread,d.shown);
     if(pass.code!==1) return {value:null};          // nothing to lay, or no room
-    const show=d.shown ? ()=>{ const px=pass.preview(); postMessage({id:job.id, preview:px}, [px.buffer]); } : null;
+    const show=()=>shownWith(job, pass.preview(), d.nw, d.nh);
     let spent=0;
     if(pass.code===1){
       const r=await inParts(job,()=>pass.clusters(CLUSTERS_PER_CALL),show);
@@ -145,7 +181,12 @@ const JOBS={
       spent=r.spent;
     }
     const t=performance.now();
-    const r=pass.end(); r.msec=spent+performance.now()-t;
-    return {value:r, give:[r.art.buffer, r.where.buffer, r.palette.buffer]};
+    const r=pass.end();
+    // The paints' borders, exactly: a cell's paint is its cluster's.
+    const paintOf=new Int32Array(d.nw*d.nh);
+    for(let k=0;k<paintOf.length;k++){ const g=d.label[k]; paintOf[k] = g<0 ? -1 : r.where[g]; }
+    r.edges=edgesOf(paintOf, d.nw, d.nh);
+    r.msec=spent+performance.now()-t;
+    return {value:r, give:[r.art.buffer, r.where.buffer, r.palette.buffer, r.edges.buffer]};
   },
 };
